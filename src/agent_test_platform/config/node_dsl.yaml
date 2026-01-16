@@ -1,0 +1,172 @@
+
+# 场景 1: 简单对话生成任务
+scenarios:
+  simple_chat:
+    nodes:
+      - id: node_chat
+        name: "与 Agent 对话直到生成任务"
+        type: "multi_turn_dialog"
+        
+        # 执行模式
+        execution_mode: "multi_turn_dialog"
+        
+        # 出口条件（何时停止对话）
+        exit_condition:
+          max_turns: 10              # 最多 10 轮对话
+          timeout_seconds: 300       # 5 分钟超时
+          
+          # 任务检测方法 1: 关键字
+          task_keywords:
+            - "任务"
+            - "已生成"
+            - "task_id"
+            - "created"
+          
+          # 任务检测方法 2: 正则表达式
+          task_regex_pattern: 'task_id.*:\s*\d+'
+          
+          # 任务检测方法 3: 自定义 Python 代码
+          custom_check_func: |
+            response.get('task_id') is not None and 
+            response.get('status') == 'created'
+        
+        # 消息生成策略
+        message_generation:
+          type: "template"           # template, ai_generated, random
+          
+          # 模板消息
+          templates:
+            - "请帮我创建一个任务"
+            - "我需要一个新的任务，请继续"
+            - "帮我完成任务的创建"
+            - "需要进一步的配置吗？"
+          
+          # AI 生成消息
+          ai_model: "gpt-3.5-turbo"
+          ai_prompt: |
+            基于对话历史，生成一条自然的、能推动对话向前的消息。
+            用户目标是: {user_task_description}
+            对话历史: {conversation_history}
+          ai_temperature: 0.7
+        
+        # 任务检测策略
+        task_detection:
+          type: "keyword"            # keyword, regex, ai, custom
+          
+          keywords:
+            - "任务"
+            - "创建成功"
+            - "task_id"
+          
+          regex_pattern: 'task_id.*:\s*[a-zA-Z0-9_]+'
+          
+          custom_check_code: |
+            'task_id' in str(response) or 'created' in str(response)
+
+      - id: node_check_task
+        name: "检查任务状态"
+        type: "action"
+        
+        execution_mode: "single_call"
+        
+        config:
+          endpoint: "/task/status"
+          method: "GET"
+          payload:
+            task_id: "{previous_task_id}"
+          extraction:
+            task_status: "status"
+            task_logs: "logs"
+
+
+# 场景 2: 复杂的多轮对话流程
+complex_workflow:
+  nodes:
+    - id: node_auth
+      name: "认证和初始化"
+      type: "action"
+      execution_mode: "single_call"
+      config:
+        endpoint: "/auth/login"
+        payload:
+          username: "{user.username}"
+          password: "***"
+    
+    - id: node_create_task
+      name: "创建任务（多轮对话）"
+      type: "multi_turn_dialog"
+      execution_mode: "multi_turn_dialog"
+      depends_on:
+        - node_auth
+      
+      exit_condition:
+        max_turns: 15
+        timeout_seconds: 600
+        task_keywords: ["任务已创建", "task_created"]
+        custom_check_func: |
+          response.get('status') == 'success' and 
+          'task_id' in response
+      
+      message_generation:
+        type: "ai_generated"
+        ai_model: "gpt-4"
+        ai_prompt: |
+          你是一个智能测试助手。
+          当前任务: {task_description}
+          对话轮次: {turn_number}
+          
+          基于对话历史，生成下一条消息来推动任务创建。
+          如果任务已创建，请确认并总结。
+    
+    - id: node_configure_task
+      name: "配置任务参数"
+      type: "multi_turn_dialog"
+      depends_on:
+        - node_create_task
+      
+      exit_condition:
+        max_turns: 10
+        custom_check_func: |
+          response.get('configuration_complete') == True
+      
+      message_generation:
+        type: "ai_generated"
+        ai_model: "gpt-4"
+    
+    - id: node_verify_task
+      name: "验证任务"
+      type: "action"
+      execution_mode: "single_call"
+      depends_on:
+        - node_configure_task
+      
+      config:
+        endpoint: "/task/{task_id}/verify"
+        method: "POST"
+        payload:
+          verification_level: "full"
+
+
+# 场景 3: 并发用户配置
+multi_user_config:
+  num_users: 100
+  concurrency: 20
+  
+  user_templates:
+    - role: "normal_user"
+      count: 50
+      dialog_personality: "简洁友好"
+      initial_message: "你好，我需要创建一个任务"
+      target_task_keywords: ["已生成", "task_id"]
+    
+    - role: "tech_user"
+      count: 30
+      dialog_personality: "技术性强"
+      initial_message: "我需要一个自动化测试任务"
+      target_task_keywords: ["configured", "ready"]
+    
+    - role: "admin"
+      count: 20
+      dialog_personality: "正式严谨"
+      initial_message: "需要创建一个新的系统任务"
+      target_task_keywords: ["权限配置完成", "ready"]
