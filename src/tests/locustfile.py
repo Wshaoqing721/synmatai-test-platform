@@ -65,7 +65,10 @@ class AgentUser(HttpUser):
                 name="submit_task",
             ) as resp:
                 if resp.status_code != 200:
-                    resp.failure("create task failed")
+                    err_msg = f"create task failed: {resp.status_code} - {resp.text}"
+                    print(f"[TASK_ERROR] {trace_id} {err_msg}", flush=True)
+                    resp.failure(err_msg)
+                    self._mark_finished_and_maybe_quit()
                     return
 
                 submit_resp = resp.json()
