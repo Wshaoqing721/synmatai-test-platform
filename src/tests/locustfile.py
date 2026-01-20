@@ -158,10 +158,16 @@ class AgentUser(HttpUser):
 
         if done >= expected:
             try:
-                # 立刻结束整个 locust 进程
+                # 尝试优雅退出
                 self.environment.runner.quit()
             except Exception:
                 pass
+            
+            # 强制退出进程，确保 run_ramp.py 能捕获到结束信号
+            import os
+            import signal
+            # 给自己发 SIGTERM
+            os.kill(os.getpid(), signal.SIGTERM)
 
     def _terminate_task(self, task_id: str):
         try:
