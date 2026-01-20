@@ -21,8 +21,39 @@ class SystemMonitor:
                  "--format=csv,noheader,nounits"],
                 encoding="utf-8"
             )
-            gpu, mem = out.strip().split(",")
-            return int(gpu), int(mem)
+            # Handle multiple GPUs (output may contain multiple lines)
+            # Example output:
+            # 0, 989
+            # 52, 13442
+            lines = out.strip().splitlines()
+            if not lines:
+                return None, None
+
+            total_gpu = 0
+            total_mem = 0
+            count = 0
+
+            for line in lines:
+                if not line.strip():
+                    continue
+                parts = line.split(",")
+                if len(parts) >= 2:
+                    total_gpu += float(parts[0].strip())
+                    total_mem += float(parts[1].strip())
+                    count += 1
+            
+            if count > 0:
+                # Return average GPU util and sum Memory used (or average memory? Usually total used is more relevant for OOM check, but average util for load)
+                # Note: `system_metrics` in existing code seems to expect a single value.
+                # Let's return the Max utilization of any GPU to see bottlenecks, or Average.
+                # Average describes "system load". Max describes "bottleneck". 
+                # Let's use Average validation for now to match simplicity.
+                return int(total_gpu / count), int(total_mem / count) # Average Memory per GPU? Or Total? 
+                
+                # If we have 2 GPUs, 1 is 100%, 1 is 0%. Average is 50%.
+                # If we return Avg, it's fine for general trend.
+                
+            return None, None
         except Exception:
             return None, None
 

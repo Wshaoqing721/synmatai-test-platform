@@ -308,6 +308,8 @@ class ReportWriter:
                                 "generated_at": ts_to_str(datetime.now().timestamp()),
                                 "schema_version": 2,
                                 "report_type": "ramp",
+                                "json_path": str(path.resolve()),
+                                "html_path": str(html_path.resolve()),
                         },
                         "ramp": {
                                 "max_stable_concurrency": (ramp_report or {}).get("max_stable_concurrency", 0),
@@ -331,145 +333,506 @@ class ReportWriter:
         def _render_ramp_html(self, report: dict) -> str:
                 report_json = json.dumps(report, ensure_ascii=False)
 
-                # 不用 Python f-string：避免 JS 里的大括号/模板字符串和 f-string 冲突
                 return (
                         """<!DOCTYPE html>
-<html lang=\"zh\">
+<html lang="zh">
 <head>
-  <meta charset=\"utf-8\"/>
-  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Nexus Ramp Test Report</title>
-  <script src=\"https://cdn.jsdelivr.net/npm/echarts@5\"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
   <style>
-    body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:0;background:#0b1220;color:rgba(255,255,255,0.92)}
-    .container{max-width:1200px;margin:0 auto;padding:24px 18px 40px}
-    .card{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:14px;margin-top:12px}
-    .title{font-size:22px;font-weight:700}
-    .subtitle{color:rgba(255,255,255,0.70);font-size:13px;margin-top:6px}
-    .chart{height:380px}
-    table{width:100%;border-collapse:collapse;font-size:13px}
-    th,td{padding:10px;border-bottom:1px solid rgba(255,255,255,0.10);white-space:nowrap;text-align:left}
-    th{background:rgba(255,255,255,0.05)}
-    .badge{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.06)}
-    .dot{width:8px;height:8px;border-radius:50%}
-    .dot.good{background:#3ddc97}
-    .dot.bad{background:#ff5d5d}
+    :root { --bg: #0f172a; --card-bg: #1e293b; --border: #334155; --text: #e2e8f0; --text-dim: #94a3b8; --accent: #38bdf8; --success: #4ade80; --danger: #f87171; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.5; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+    .header { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: start; }
+    .title { font-size: 24px; font-weight: 700; color: #fff; }
+    .subtitle { color: var(--text-dim); font-size: 14px; margin-top: 4px; }
+    
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 20px; overflow: hidden; }
+    .card h3 { margin: 0 0 16px; font-size: 16px; color: var(--text-dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    
+    .stat-value { font-size: 32px; font-weight: 700; color: #fff; }
+    .stat-label { font-size: 13px; color: var(--text-dim); }
+    
+    .chart { width: 100%; height: 400px; }
+    
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { text-align: left; padding: 12px 16px; background: rgba(0,0,0,0.2); color: var(--text-dim); font-weight: 600; }
+    td { padding: 12px 16px; border-top: 1px solid var(--border); color: var(--text); }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    
+    .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 500; }
+    .badge.success { background: rgba(74, 222, 128, 0.1); color: var(--success); border: 1px solid rgba(74, 222, 128, 0.2); }
+    .badge.failure { background: rgba(248, 113, 113, 0.1); color: var(--danger); border: 1px solid rgba(248, 113, 113, 0.2); }
+    
+    .btn { cursor: pointer; padding: 6px 12px; background: var(--accent); color: #000; border-radius: 6px; border: none; font-weight: 600; font-size: 12px; transition: opacity 0.2s; }
+    .btn:hover { opacity: 0.9; }
+    .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    .btn-outline:hover { border-color: var(--text-dim); }
+
+    /* Modal */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 50; backdrop-filter: blur(4px); }
+    .modal { background: var(--card-bg); width: 90%; max-width: 1200px; max-height: 90vh; border-radius: 16px; border: 1px solid var(--border); display: flex; flex-direction: column; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); }
+    .modal.active { display: flex; }
+    .modal-header { padding: 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2); }
+    .modal-body { padding: 0; overflow-y: auto; flex: 1; display: flex; flex-direction: column; }
+    .modal-close { background: transparent; border: none; color: var(--text-dim); font-size: 24px; cursor: pointer; }
+    
+    .tabs { display: flex; border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.1); }
+    .tab { padding: 12px 24px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--text-dim); font-weight: 500; transition: all 0.2s; }
+    .tab:hover { color: var(--text); background: rgba(255,255,255,0.02); }
+    .tab.active { border-bottom-color: var(--accent); color: var(--accent); background: rgba(56, 189, 248, 0.05); }
+    
+    .tab-content { display: none; padding: 20px; }
+    .tab-content.active { display: block; }
+
+    .json-view { background: #000; padding: 12px; border-radius: 8px; font-family: monospace; font-size: 12px; white-space: pre-wrap; color: #a5b4fc; max-height: 300px; overflow: auto; border: 1px solid var(--border); }
+    
+    .task-item { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; background: rgba(255,255,255,0.01); }
+    .task-header { padding: 12px; display: flex; gap: 12px; align-items: center; cursor: pointer; background: rgba(255,255,255,0.02); user-select: none; }
+    .task-header:hover { background: rgba(255,255,255,0.04); }
+    .task-body { padding: 12px; border-top: 1px solid var(--border); display: none; background: rgba(0,0,0,0.2); }
+    .task-body.open { display: block; }
+    
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+    .metric-box { background: rgba(255,255,255,0.03); padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); }
+    .metric-box label { font-size: 11px; color: var(--text-dim); display: block; margin-bottom: 4px; }
+    .metric-box div { font-size: 16px; font-weight: 600; font-family: monospace; }
   </style>
 </head>
 <body>
-  <div class=\"container\">
-    <div class=\"title\">Nexus 爬坡压测报告</div>
-    <div class=\"subtitle\">Generated at: <span id=\"generatedAt\">-</span></div>
-
-    <div class=\"card\">
-      <div class=\"subtitle\">最大稳定并发: <b id=\"maxStable\">-</b> · 档位数: <b id=\"steps\">-</b></div>
+  <div class="container">
+    <div class="header">
+      <div>
+        <div class="title">Nexus Ramp Test Report</div>
+        <div class="subtitle">Generated at: <span id="generatedAt">-</span></div>
+      </div>
+      <div class="badge success" id="statusBadge" style="font-size: 14px; padding: 6px 16px;">
+        Max Stable Concurrency: <span id="maxStable" style="font-weight: 700; margin-left: 6px">-</span>
+      </div>
     </div>
 
-    <div class=\"card\">
-      <h3 style=\"margin:0 0 10px\">曲线</h3>
-      <div id=\"rampChart\" class=\"chart\"></div>
+    <!-- Summary Cards -->
+    <div class="grid">
+      <div class="card">
+        <h3>Total Steps</h3>
+        <div class="stat-value" id="totalSteps">-</div>
+        <div class="stat-label">Ramp-up increments</div>
+      </div>
+      <div class="card">
+        <h3>Max Duration</h3>
+        <div class="stat-value" id="maxDuration">-</div>
+        <div class="stat-label">Seconds (p95)</div>
+      </div>
+      <div class="card">
+        <h3>Overall Failure Rate</h3>
+        <div class="stat-value" id="failureRate">-</div>
+        <div class="stat-label">Across all steps</div>
+      </div>
     </div>
 
-    <div class=\"card\">
-      <h3 style=\"margin:0 0 10px\">档位明细</h3>
-      <div style=\"overflow-x:auto\">
+    <!-- Charts -->
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3>Performance Trend</h3>
+        <div style="font-size: 12px; color: var(--text-dim);">Duration vs Concurrency</div>
+      </div>
+      <div id="mainChart" class="chart"></div>
+    </div>
+
+    <!-- Steps Table -->
+    <div class="card" style="margin-top: 24px;">
+      <h3>Ramp Steps Detail</h3>
+      <div style="overflow-x: auto;">
         <table>
           <thead>
             <tr>
-              <th>Concurrency</th><th>Stable</th><th>Reason</th><th>Tasks</th><th>Failure Rate</th><th>Avg Duration(s)</th><th>Avg Queue(s)</th>
+              <th>Concurrency</th>
+              <th>Status</th>
+              <th>Task Count</th>
+              <th>Success Rate</th>
+              <th>Avg Latency</th>
+              <th>Avg Queue</th>
+              <th>GPU Util (Max)</th>
+              <th style="text-align: right">Actions</th>
             </tr>
           </thead>
-          <tbody id=\"rampTable\"></tbody>
+          <tbody id="stepsTableBody"></tbody>
         </table>
       </div>
-      <div class=\"subtitle\">JSON 内包含每档位 task_table、task_summary_v2、system_metrics_v2</div>
     </div>
   </div>
 
-  <script type=\"application/json\" id=\"reportData\">"""
+  <!-- Detail Modal -->
+  <div class="modal-overlay" id="detailModal">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h2 style="margin: 0; font-size: 18px;">Concurrency Level: <span id="modalConcurrency">-</span></h2>
+          <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">Status: <span id="modalStatus">-</span></div>
+        </div>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      
+      <div class="modal-body" style="padding-bottom: 0;">
+         <!-- Summary Section (Always Visible) -->
+         <div style="padding: 16px; border-bottom: 1px solid var(--border);">
+             <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px;" id="modalSummaryGrid"></div>
+         </div>
+
+         <!-- System Metrics Section (Always Visible) -->
+         <div style="padding: 16px; border-bottom: 1px solid var(--border);">
+            <div style="font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--text-dim);">System Metrics Sequence</div>
+            <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 12px;">
+                <div style="height: 200px;" id="metricChartCpu"></div>
+                <div style="height: 200px;" id="metricChartMem"></div>
+                <div style="height: 200px;" id="metricChartGpu"></div>
+                <div style="height: 200px;" id="metricChartGpuMem"></div>
+            </div>
+         </div>
+      </div>
+
+      <div class="tabs" style="margin-top: 0; border-top: none;">
+        <div class="tab active" onclick="switchTab('tasks')">Tasks &amp; Logs</div>
+        <div class="tab" onclick="switchTab('config')">Step Config</div>
+      </div>
+
+      <div class="modal-body" style="padding-top: 0; flex: 1; overflow-y: auto;">
+        <!-- Tasks Tab -->
+        <div id="tab-tasks" class="tab-content active" style="padding-top: 16px;">
+           <div style="margin-bottom: 12px; display: flex; gap: 12px;">
+             <input type="text" id="taskSearch" placeholder="Search task ID or error..." 
+                    style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); color: #fff; padding: 8px 12px; border-radius: 6px; flex: 1;">
+             <select id="taskFilter" style="background: rgba(0,0,0,0.2); border: 1px solid var(--border); color: #fff; padding: 8px 12px; border-radius: 6px;">
+               <option value="all">All Status</option>
+               <option value="failed">Failed Only</option>
+               <option value="success">Success Only</option>
+             </select>
+           </div>
+           <div id="taskList"></div>
+        </div>
+        
+        <!-- Config Tab -->
+        <div id="tab-config" class="tab-content" style="padding-top: 16px;">
+          <div class="json-view" id="stepConfigJson"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="application/json" id="reportData">"""
                         + report_json +
                         """</script>
+  
   <script>
+    // --- Data Init ---
     const report = JSON.parse(document.getElementById('reportData').textContent);
     const meta = report.meta || {};
     const ramp = report.ramp || {};
     const results = ramp.ramp_results || [];
+    let currentStepIndex = -1;
 
-    document.getElementById('generatedAt').textContent = meta.generated_at || '-';
-    document.getElementById('maxStable').textContent = String(ramp.max_stable_concurrency ?? '-');
-    document.getElementById('steps').textContent = String(results.length);
+    // --- DOM Elements ---
+    const el = (id) => document.getElementById(id);
 
-    function fmtPct(x){
-      if(x===null||x===undefined) return '-';
-      const v = Number(x);
-      if(Number.isNaN(v)) return '-';
-      return (v*100).toFixed(2)+'%';
+    // --- Formatters ---
+    const fmt = {
+      int: (v) => v?.toLocaleString() ?? '-',
+      float: (v, d=2) => typeof v === 'number' ? v.toFixed(d) : '-',
+      pct: (v) => typeof v === 'number' ? (v * 100).toFixed(1) + '%' : '-',
+      dur: (ms) => typeof ms === 'number' ? (ms < 1000 ? ms.toFixed(0)+'ms' : (ms/1000).toFixed(2)+'s') : '-',
+      date: (ts) => ts ? new Date(ts * 1000).toLocaleTimeString() : '-'
+    };
+
+    // --- Init View ---
+    function init() {
+      el('generatedAt').textContent = meta.generated_at || '-';
+      // el('reportPath').textContent = ... removed
+      el('maxStable').textContent = ramp.max_stable_concurrency ?? '-';
+      el('totalSteps').textContent = results.length;
+      
+      const allDurations = results.flatMap(r => 
+         Object.values(r.tasks || {}).map(t => t.duration_s).filter(d => d != null)
+      );
+      const maxDur = allDurations.length ? Math.max(...allDurations) : 0;
+      el('maxDuration').textContent = fmt.float(maxDur, 2) + 's';
+      
+      const failRate = results.reduce((acc, r) => acc + (r.metrics?.failure_count || 0), 0) / 
+                       results.reduce((acc, r) => acc + (r.metrics?.task_count || 0), 1);
+      el('failureRate').textContent = fmt.pct(failRate);
+
+      // Render Main Table
+      const tbody = el('stepsTableBody');
+      tbody.innerHTML = '';
+      
+      results.forEach((r, idx) => {
+        const metrics = r.metrics || {};
+        const sys = (r.system_metrics_v2?.summary) || {};
+        const gpuMax = sys.gpu_pct?.max;
+        
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><b style="color: #fff">${r.concurrency}</b></td>
+          <td>
+            <span class="badge ${r.stable ? 'success' : 'failure'}">
+              ${r.stable ? 'Stable' : 'Unstable'}
+            </span>
+            ${!r.stable && r.reason ? `<div style="font-size:11px; margin-top:4px; opacity:0.8">${r.reason}</div>` : ''}
+          </td>
+          <td>${fmt.int(metrics.task_count)}</td>
+          <td style="color: ${metrics.failure_rate > 0 ? 'var(--danger)' : 'var(--success)'}">
+            ${fmt.pct(1 - (metrics.failure_rate || 0))}
+          </td>
+          <td>${fmt.float(metrics.avg_duration, 3)}s</td>
+          <td>${fmt.float(metrics.avg_queue_time, 3)}s</td>
+          <td>${fmt.pct(gpuMax/100)}</td>
+          <td style="text-align: right">
+            <button class="btn btn-outline" onclick="openStepDetail(${idx})">View Details</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      initMainChart();
+      
+      // Setup Search Listener
+      el('taskSearch').addEventListener('input', renderTaskList);
+      el('taskFilter').addEventListener('change', renderTaskList);
     }
-    function fmtNum(x){
-      if(x===null||x===undefined) return '-';
-      const v = Number(x);
-      if(Number.isNaN(v)) return '-';
-      return v.toFixed(3);
+
+    function initMainChart() {
+      const chart = echarts.init(el('mainChart'));
+      const xData = results.map(r => r.concurrency);
+      const yDur = results.map(r => r.metrics?.avg_duration);
+      const yFail = results.map(r => (r.metrics?.failure_rate || 0) * 100);
+      
+      chart.setOption({
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+        legend: { textStyle: { color: '#94a3b8' } },
+        grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+        xAxis: { type: 'category', data: xData, axisLabel: { color: '#94a3b8' } },
+        yAxis: [
+          { type: 'value', name: 'Duration (s)', splitLine: { lineStyle: { color: '#334155' } }, axisLabel: { color: '#94a3b8' } },
+          { type: 'value', name: 'Failure (%)', max: 100, position: 'right', axisLabel: { color: '#94a3b8' } }
+        ],
+        series: [
+          { name: 'Avg Duration', type: 'line', data: yDur, smooth: true, itemStyle: { color: '#38bdf8' } },
+          { name: 'Failure Rate', type: 'line', yAxisIndex: 1, data: yFail, smooth: true, itemStyle: { color: '#f87171' }, areaStyle: { opacity: 0.1 } }
+        ]
+      });
+      window.addEventListener('resize', () => chart.resize());
     }
 
-    const tbody = document.getElementById('rampTable');
-    tbody.innerHTML = '';
-    for(const r of results){
-      const tr = document.createElement('tr');
-      const dot = r.stable ? 'good' : 'bad';
-      const badge = document.createElement('span');
-      badge.className = 'badge';
-      const dotEl = document.createElement('span');
-      dotEl.className = 'dot ' + dot;
-      badge.appendChild(dotEl);
-      const txt = document.createElement('span');
-      txt.textContent = r.stable ? 'STABLE' : 'UNSTABLE';
-      badge.appendChild(txt);
-
-      const metrics = r.metrics || {};
-      const tasks = r.task_summary_v2 || {};
-
-      const cells = [
-        String(r.concurrency ?? '-'),
-        badge,
-        String(r.reason ?? '-'),
-        String(tasks.total_tasks ?? metrics.task_count ?? '-'),
-        fmtPct(metrics.failure_rate),
-        fmtNum(metrics.avg_duration),
-        fmtNum(metrics.avg_queue_time),
-      ];
-
-      for(const c of cells){
-        const td = document.createElement('td');
-        if(c instanceof HTMLElement) td.appendChild(c);
-        else td.textContent = c;
-        tr.appendChild(td);
+    // --- Modal Logic ---
+    window.openStepDetail = function(idx) {
+      if (typeof idx !== 'number' || idx < 0 || idx >= results.length) {
+          console.error('Invalid step index:', idx);
+          return;
       }
-      tbody.appendChild(tr);
+      currentStepIndex = idx;
+      const step = results[idx];
+      console.log('Opening step:', idx, step);
+      
+      const setEl = (id, val) => {
+         const e = el(id);
+         if(e) e.textContent = val;
+      };
+
+      setEl('modalConcurrency', step.concurrency);
+      setEl('modalStatus', step.stable ? 'Stable' : `Unstable (${step.reason})`);
+      setEl('stepConfigJson', JSON.stringify(step.config || {}, null, 2));
+
+      // Populate Summary Tab
+      const summaryGrid = el('modalSummaryGrid');
+      summaryGrid.innerHTML = '';
+      const m = step.metrics || {};
+      const sys = (step.system_metrics_v2?.summary) || {};
+      
+      const addMetric = (label, val, sub) => {
+         const div = document.createElement('div');
+         div.className = 'metric-box';
+         div.style.background = 'rgba(255,255,255,0.03)';
+         div.innerHTML = `<label>${label}</label><div>${val}</div>${sub ? `<div style="font-size:11px; color:var(--text-dim); margin-top:2px">${sub}</div>` : ''}`;
+         summaryGrid.appendChild(div);
+      };
+
+      addMetric('Total Tasks', m.task_count);
+      addMetric('Success Rate', fmt.pct(1 - (m.failure_rate||0)));
+      addMetric('Avg Duration', fmt.float(m.avg_duration, 3) + 's');
+      addMetric('P95 Duration', fmt.float(m.p95_duration, 3) + 's');
+      addMetric('Avg Queue Time', fmt.float(m.avg_queue_time, 3) + 's');
+      addMetric('Max Queue Time', fmt.float(m.max_queue_time, 3) + 's');
+      
+      addMetric('Avg TPS', fmt.float(m.tps, 2));
+      addMetric('Failure Count', m.failure_count);
+      
+      // System
+      addMetric('Max CPU', fmt.pct((sys.cpu_pct?.max||0)/100));
+      addMetric('Max Memory', fmt.pct((sys.mem_pct?.max||0)/100));
+      addMetric('Max GPU Util', fmt.pct((sys.gpu_pct?.max||0)/100));
+      addMetric('Max GPU Mem', fmt.float(sys.gpu_mem_mb?.max, 0) + ' MB');
+
+      const modal = el('detailModal');
+      if (modal) {
+        modal.classList.add('active');
+        modal.style.display = 'flex';
+      } else {
+        console.error('Modal element not found');
+      }
+
+      document.body.style.overflow = 'hidden';
+      
+      switchTab('tasks');
+      renderTaskList();
+      
+      // Delay chart render slightly for layout
+      setTimeout(() => renderMetricCharts(step), 100);
+    };
+
+    window.closeModal = function() {
+      el('detailModal').classList.remove('active');
+      document.body.style.overflow = '';
+    };
+
+    window.switchTab = function(tabId) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      
+      const tabEl = document.querySelector(`.tab[onclick="switchTab('${tabId}')"]`); 
+      if(tabEl) tabEl.classList.add('active');
+      
+      const content = el('tab-' + tabId);
+      if(content) content.classList.add('active');
+    };
+
+    function renderTaskList() {
+      if (currentStepIndex < 0) return;
+      const step = results[currentStepIndex];
+      const tasks = Object.values(step.tasks || {});
+      const filterTxt = el('taskSearch').value.toLowerCase();
+      const filterStatus = el('taskFilter').value; // all, failed, success
+      
+      const container = el('taskList');
+      container.innerHTML = '';
+      
+      const filtered = tasks.filter(t => {
+        const matchesText = (t.task_id || '').toLowerCase().includes(filterTxt) || 
+                            (t.error || '').toLowerCase().includes(filterTxt);
+        const isSuccess = t.success === true;
+        const matchesStatus = filterStatus === 'all' ? true : 
+                              (filterStatus === 'success' ? isSuccess : !isSuccess);
+        return matchesText && matchesStatus;
+      });
+
+      if (filtered.length === 0) {
+        container.innerHTML = '<div style="padding:20px; text-align:center; color:#666">No tasks found</div>';
+        return;
+      }
+      
+      // Render max 100 to avoid DOM freeze, or implement pagination. For now, limit and show warning.
+      const displayTasks = filtered.slice(0, 100);
+      
+      displayTasks.forEach(t => {
+        const div = document.createElement('div');
+        div.className = 'task-item';
+        const isErr = !t.success;
+        const color = isErr ? 'var(--danger)' : 'var(--success)';
+        const resultPath = t.submit_resp?.data?.result_file || t.final?.result?.workspace_dir;
+        
+        div.innerHTML = `
+          <div class="task-header" onclick="toggleTask(this)">
+            <div style="width: 8px; height: 8px; border-radius: 50%; background: ${color}"></div>
+            <div style="flex: 1; font-family: monospace; font-size: 13px;">${t.task_id}</div>
+            <div style="width: 80px; text-align: right; color: var(--text-dim); font-size: 12px;">${fmt.float(t.duration_s, 3)}s</div>
+            <div style="width: 20px; text-align: center; color: var(--text-dim);">▼</div>
+          </div>
+          <div class="task-body">
+            <div class="metric-grid">
+               <div class="metric-box"><label>Queue Time</label><div>${fmt.float(t.queue_time_s, 3)}s</div></div>
+               <div class="metric-box"><label>Submit</label><div>${fmt.date(t.submit_ts)}</div></div>
+               <div class="metric-box"><label>Start</label><div>${fmt.date(t.start_ts)}</div></div>
+               <div class="metric-box"><label>End</label><div>${fmt.date(t.end_ts)}</div></div>
+            </div>
+            
+            ${resultPath ? `<div style="margin-top:12px; font-size:12px; font-family:monospace; background:rgba(255,255,255,0.05); padding:8px; border-radius:4px; word-break:break-all;"><strong style="color:var(--text-dim)">Result Path:</strong> ${resultPath}</div>` : ''}
+
+            ${t.error ? `<div style="margin-top:12px; color: var(--danger); background: rgba(248,113,113,0.1); padding: 8px; border-radius: 4px; font-family: monospace;">${t.error}</div>` : ''}
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;">
+              <div>
+                <div style="color: var(--text-dim); font-size: 11px; margin-bottom: 4px;">PAYLOAD</div>
+                <div class="json-view">${escapeHtml(JSON.stringify(t.input || t.payload, null, 2))}</div>
+              </div>
+              <div>
+                 <div style="color: var(--text-dim); font-size: 11px; margin-bottom: 4px;">FINAL RESULT</div>
+                 <div class="json-view">${escapeHtml(JSON.stringify(t.final || t.result, null, 2))}</div>
+              </div>
+            </div>
+
+            <div style="margin-top: 12px;">
+               <div style="color: var(--text-dim); font-size: 11px; margin-bottom: 4px;">SUBMIT_RESP</div>
+               <div class="json-view">${escapeHtml(JSON.stringify(t.submit_resp, null, 2))}</div>
+            </div>
+          </div>
+        `;
+        container.appendChild(div);
+      });
+      
+      if (filtered.length > 100) {
+        const more = document.createElement('div');
+        more.style.padding = '12px';
+        more.style.textAlign = 'center';
+        more.style.color = 'var(--text-dim)';
+        more.textContent = `... and ${filtered.length - 100} more tasks. Use search to filter.`;
+        container.appendChild(more);
+      }
     }
 
-    const xs = results.map(r => r.concurrency ?? 0);
-    const avgDur = results.map(r => (r.metrics && r.metrics.avg_duration) ?? null);
-    const avgQueue = results.map(r => (r.metrics && r.metrics.avg_queue_time) ?? null);
-    const failRate = results.map(r => (r.metrics && r.metrics.failure_rate) ?? null);
+    window.toggleTask = function(header) {
+      const body = header.nextElementSibling;
+      body.classList.toggle('open');
+      const arrow = header.querySelector('div:last-child');
+      arrow.textContent = body.classList.contains('open') ? '▲' : '▼';
+    };
 
-    const chart = echarts.init(document.getElementById('rampChart'));
-    chart.setOption({
-      tooltip: {trigger:'axis'},
-      legend: {},
-      grid: {left:50,right:30,top:40,bottom:40},
-      xAxis: {type:'category',data:xs},
-      yAxis: [
-        {type:'value',name:'Seconds'},
-        {type:'value',name:'Failure Rate',min:0,max:1,axisLabel:{formatter:(v)=> (v*100).toFixed(0)+'%'}}
-      ],
-      series: [
-        {name:'Avg Duration (s)',type:'line',data:avgDur,smooth:true,symbolSize:6},
-        {name:'Avg Queue (s)',type:'line',data:avgQueue,smooth:true,symbolSize:6},
-        {name:'Failure Rate',type:'line',yAxisIndex:1,data:failRate,smooth:true,symbolSize:6},
-      ]
-    });
-    window.addEventListener('resize', ()=> chart.resize());
+    function escapeHtml(text) {
+      if (!text) return text;
+      return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    }
+
+    function renderMetricCharts(step) {
+      const timeline = step.system_metrics_v2?.timeline || [];
+      if (!timeline.length) {
+        el('metricChartCpu').innerHTML = '<div style="text-align:center; padding:40px; color:#666">No system metrics</div>';
+        return;
+      }
+      
+      const times = timeline.map(t => new Date(t.ts * 1000).toLocaleTimeString());
+      
+      const createChart = (id, label, data, color) => {
+        const chart = echarts.init(el(id));
+        chart.setOption({
+          title: { text: label, textStyle: { color: '#94a3b8', fontSize: 13 } },
+          tooltip: { trigger: 'axis' },
+          grid: { left: 40, right: 20, top: 40, bottom: 20 },
+          xAxis: { type: 'category', data: times, show: false },
+          yAxis: { type: 'value', splitLine: { lineStyle: { color: '#334155' } } },
+          series: [{ type: 'line', data: data, showSymbol: false, itemStyle: { color: color }, areaStyle: { opacity: 0.1 } }]
+        });
+        return chart;
+      };
+      
+      createChart('metricChartCpu', 'CPU (%)', timeline.map(t => t.cpu), '#38bdf8');
+      createChart('metricChartMem', 'Memory (%)', timeline.map(t => t.mem), '#a78bfa');
+      createChart('metricChartGpu', 'GPU (%)', timeline.map(t => t.gpu), '#4ade80');
+      createChart('metricChartGpuMem', 'GPU Mem (MB)', timeline.map(t => t.gpu_mem), '#fbbf24');
+    }
+
+    // Start
+    init();
   </script>
 </body>
 </html>"""

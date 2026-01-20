@@ -26,7 +26,7 @@ def _b64json_decode(s: str):
 # =========================
 # 并发爬坡配置
 # =========================
-CONCURRENCY_STEPS = [1]
+CONCURRENCY_STEPS = [1,2,4]
 FAILURE_RATE_THRESHOLD = 0.01
 MIN_TASKS = 1
 
