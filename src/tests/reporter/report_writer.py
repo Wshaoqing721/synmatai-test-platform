@@ -499,23 +499,23 @@ class ReportWriter:
   <style>
     :root { --bg: #0f172a; --card-bg: #1e293b; --border: #334155; --text: #e2e8f0; --text-dim: #94a3b8; --accent: #38bdf8; --success: #4ade80; --danger: #f87171; }
     body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--text); line-height: 1.5; }
-    .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-    .header { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: start; }
-    .title { font-size: 24px; font-weight: 700; color: #fff; }
-    .subtitle { color: var(--text-dim); font-size: 14px; margin-top: 4px; }
+    .container { max-width: 1400px; margin: 0 auto; padding: 16px; }
+    .header { margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+    .title { font-size: 20px; font-weight: 700; color: #fff; }
+    .subtitle { color: var(--text-dim); font-size: 13px; margin-top: 2px; }
     
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-bottom: 24px; }
-    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 20px; overflow: hidden; }
-    .card h3 { margin: 0 0 16px; font-size: 16px; color: var(--text-dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow: hidden; }
+    .card h3 { margin: 0 0 12px; font-size: 14px; color: var(--text-dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
     
-    .stat-value { font-size: 32px; font-weight: 700; color: #fff; }
-    .stat-label { font-size: 13px; color: var(--text-dim); }
+    .stat-value { font-size: 26px; font-weight: 700; color: #fff; }
+    .stat-label { font-size: 12px; color: var(--text-dim); }
     
-    .chart { width: 100%; height: 300px; }
+    .chart { width: 100%; height: 260px; }
     
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th { text-align: left; padding: 12px 16px; background: rgba(0,0,0,0.2); color: var(--text-dim); font-weight: 600; }
-    td { padding: 12px 16px; border-top: 1px solid var(--border); color: var(--text); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; padding: 10px 12px; background: rgba(0,0,0,0.2); color: var(--text-dim); font-weight: 600; }
+    td { padding: 10px 12px; border-top: 1px solid var(--border); color: var(--text); }
     tr:hover td { background: rgba(255,255,255,0.02); }
     
     .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 500; }
@@ -531,16 +531,16 @@ class ReportWriter:
     .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 50; backdrop-filter: blur(4px); }
     .modal { background: var(--card-bg); width: 90%; max-width: 1200px; max-height: 90vh; border-radius: 16px; border: 1px solid var(--border); display: flex; flex-direction: column; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); }
     .modal.active { display: flex; }
-    .modal-header { padding: 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2); }
+    .modal-header { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.2); }
     .modal-body { padding: 0; overflow-y: auto; flex: 1; display: flex; flex-direction: column; }
     .modal-close { background: transparent; border: none; color: var(--text-dim); font-size: 24px; cursor: pointer; }
     
     .tabs { display: flex; border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.1); }
-    .tab { padding: 12px 24px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--text-dim); font-weight: 500; transition: all 0.2s; }
+    .tab { padding: 10px 20px; cursor: pointer; border-bottom: 2px solid transparent; color: var(--text-dim); font-weight: 500; transition: all 0.2s; font-size: 13px; }
     .tab:hover { color: var(--text); background: rgba(255,255,255,0.02); }
     .tab.active { border-bottom-color: var(--accent); color: var(--accent); background: rgba(56, 189, 248, 0.05); }
     
-    .tab-content { display: none; padding: 20px; }
+    .tab-content { display: none; padding: 16px; }
     .tab-content.active { display: block; }
 
     .json-view { background: #000; padding: 12px; border-radius: 8px; font-family: monospace; font-size: 12px; white-space: pre-wrap; color: #a5b4fc; max-height: 300px; overflow: auto; border: 1px solid var(--border); }
@@ -551,10 +551,10 @@ class ReportWriter:
     .task-body { padding: 12px; border-top: 1px solid var(--border); display: none; background: rgba(0,0,0,0.2); }
     .task-body.open { display: block; }
     
-    .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-    .metric-box { background: rgba(255,255,255,0.03); padding: 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); }
-    .metric-box label { font-size: 11px; color: var(--text-dim); display: block; margin-bottom: 4px; }
-    .metric-box div { font-size: 16px; font-weight: 600; font-family: monospace; }
+    .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+    .metric-box { background: rgba(255,255,255,0.03); padding: 8px 10px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); }
+    .metric-box label { font-size: 10px; color: var(--text-dim); display: block; margin-bottom: 2px; }
+    .metric-box div { font-size: 14px; font-weight: 600; font-family: monospace; }
   </style>
 </head>
 <body>
@@ -646,13 +646,13 @@ class ReportWriter:
       
       <div class="modal-body" style="padding-bottom: 0;">
          <!-- Summary Section (Always Visible) -->
-         <div style="padding: 16px; border-bottom: 1px solid var(--border);">
-             <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px;" id="modalSummaryGrid"></div>
+         <div style="padding: 12px 16px; border-bottom: 1px solid var(--border);">
+             <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-bottom: 0;" id="modalSummaryGrid"></div>
          </div>
 
          <!-- System Metrics Section (Always Visible) -->
-         <div style="padding: 16px; border-bottom: 1px solid var(--border);">
-            <div style="font-size: 13px; font-weight: 600; margin-bottom: 12px; color: var(--text-dim);">System Metrics Sequence</div>
+         <div style="padding: 12px 16px; border-bottom: 1px solid var(--border);">
+            <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px; color: var(--text-dim);">System Metrics Sequence</div>
             <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 12px;">
                 <div style="height: 200px;" id="metricChartCpu"></div>
                 <div style="height: 200px;" id="metricChartMem"></div>
@@ -722,7 +722,7 @@ class ReportWriter:
       el('totalSteps').textContent = results.length;
       
       const allDurations = results.flatMap(r => 
-         Object.values(r.tasks || {}).map(t => t.duration_s).filter(d => d != null)
+         Object.values(r.tasks || {}).map(t => t.duration_s ?? t.duration).filter(d => d != null)
       );
       const maxDur = allDurations.length ? Math.max(...allDurations) : 0;
       el('maxDuration').textContent = fmt.float(maxDur, 2) + 's';
@@ -984,15 +984,16 @@ class ReportWriter:
           <div class="task-header" onclick="toggleTask(this)">
             <div style="width: 8px; height: 8px; border-radius: 50%; background: ${color}"></div>
             <div style="flex: 1; font-family: monospace; font-size: 13px;">${t.task_id}</div>
-            <div style="width: 80px; text-align: right; color: var(--text-dim); font-size: 12px;">${fmt.float(t.duration_s, 3)}s</div>
+            <div style="width: 80px; text-align: right; color: var(--text-dim); font-size: 12px;">${fmt.float(t.duration_s ?? t.duration, 3)}s</div>
             <div style="width: 20px; text-align: center; color: var(--text-dim);">▼</div>
           </div>
           <div class="task-body">
-            <div class="metric-grid">
-               <div class="metric-box"><label>Queue Time</label><div>${fmt.float(t.queue_time_s, 3)}s</div></div>
+            <div class="metric-grid" style="grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px;">
+               <div class="metric-box"><label>Duration</label><div>${fmt.float(t.duration_s ?? t.duration, 3)}s</div></div>
+               <div class="metric-box"><label>Queue Time</label><div>${fmt.float(t.queue_time_s ?? t.queue_time, 3)}s</div></div>
                <div class="metric-box"><label>Submit</label><div>${fmt.date(t.submit_ts)}</div></div>
                <div class="metric-box"><label>Start</label><div>${fmt.date(t.start_ts)}</div></div>
-               <div class="metric-box"><label>End</label><div>${fmt.date(t.end_ts)}</div></div>
+               <div class="metric-box"><label>End</label><div>${fmt.date(t.finish_ts ?? t.end_ts)}</div></div>
             </div>
             
             ${resultPath ? `<div style="margin-top:12px; font-size:12px; font-family:monospace; background:rgba(255,255,255,0.05); padding:8px; border-radius:4px; word-break:break-all;"><strong style="color:var(--text-dim)">Result Path:</strong> ${resultPath}</div>` : ''}

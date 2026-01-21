@@ -12,7 +12,7 @@ LOCUST_RUN_TIME = "4h"
 # monitor
 SYSTEM_MONITOR_INTERVAL = 2.0
 
-REPORT_PATH = "src/tests/reports/patent_test_report.json"
+REPORT_PATH = "src/tests/reports/"
 # =========================
 # 终止阈值 / 保护策略
 # =========================

@@ -6,6 +6,8 @@ import json
 import time
 import os
 import signal
+import random
+from datetime import datetime
 from pathlib import Path
 
 from tests.config import (
@@ -26,6 +28,18 @@ from tests.reporter.report_writer import ReportWriter
 def _b64json_decode(s: str):
     raw = base64.urlsafe_b64decode(s.encode("ascii"))
     return json.loads(raw.decode("utf-8"))
+
+
+def _resolve_report_path(report_path: str | Path) -> Path:
+    """Resolve report path. If a directory is given, create filename with time + 6-digit random."""
+    p = Path(report_path)
+    is_dir_hint = str(report_path).endswith("/") or p.suffix == ""
+    if is_dir_hint:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        rnd = f"{random.randint(0, 999999):06d}"
+        filename = f"ramp_report_{ts}_{rnd}.json"
+        return p / filename
+    return p
 
 
 # =========================
@@ -252,12 +266,13 @@ async def main():
         "ramp_results": ramp_results,
     }
 
+    report_path = _resolve_report_path(REPORT_PATH)
     writer = ReportWriter(
         ws_monitor=None,
         sys_monitor=None,
         task_manager=None,
     )
-    writer.write_ramp_report(REPORT_PATH, final_report)
+    writer.write_ramp_report(report_path, final_report)
 
     print("\n🎯 FINAL RESULT")
     print(f"✅ Max stable concurrency = {max_stable_concurrency}")
