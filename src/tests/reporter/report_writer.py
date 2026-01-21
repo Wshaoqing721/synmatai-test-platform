@@ -63,6 +63,36 @@ class ReportWriter:
                 self.task_manager = task_manager
                 self.sys_monitor = sys_monitor
 
+        def _calc_mem_delta(self, records: list[dict]) -> dict | None:
+                if not records:
+                        return None
+
+                avail_values: list[float] = []
+                for m in records:
+                        if not isinstance(m, dict):
+                                continue
+                        v = m.get("mem_available_mb")
+                        if v is None:
+                                continue
+                        try:
+                                avail_values.append(float(v))
+                        except Exception:
+                                continue
+
+                if not avail_values:
+                        return None
+
+                available_before_mb = avail_values[0]
+                available_min_mb = min(avail_values)
+                delta_mb = max(0.0, available_before_mb - available_min_mb)
+
+                return {
+                        "available_before_mb": round_s(available_before_mb, 1),
+                        "available_min_mb": round_s(available_min_mb, 1),
+                        "delta_mb": round_s(delta_mb, 1),
+                        "delta_gb": round_s(delta_mb / 1024.0, 3),
+                }
+
         # ---------- Task 维度 ----------
         def build_task_table(self, tasks: dict) -> list[dict]:
                 rows: list[dict] = []
@@ -402,10 +432,22 @@ class ReportWriter:
                         system_metrics = r.get("system_metrics") or []
                         system_metrics_v2 = self.summarize_system_metrics(system_metrics) if isinstance(system_metrics, list) else None
 
+                        mem_delta = self._calc_mem_delta(system_metrics) if isinstance(system_metrics, list) else None
+                        concurrency = r.get("concurrency")
+                        mem_per_task_gb = None
+                        if mem_delta and isinstance(concurrency, int) and concurrency > 0:
+                                try:
+                                        mem_per_task_gb = round_s(float(mem_delta.get("delta_mb", 0.0)) / 1024.0 / float(concurrency), 3)
+                                except Exception:
+                                        mem_per_task_gb = None
+                        if mem_delta is not None:
+                                mem_delta["per_task_gb"] = mem_per_task_gb
+
                         enriched = dict(r)
                         enriched["task_table"] = task_table
                         enriched["task_summary_v2"] = task_summary_v2
                         enriched["system_metrics_v2"] = system_metrics_v2
+                        enriched["mem"] = mem_delta
                         enriched_results.append(enriched)
 
                 report = {
@@ -579,8 +621,9 @@ class ReportWriter:
               <th>Avg Queue</th>
               <th>CPU Avg</th>
               <th>Mem Avg</th>
-              <th>GPU Avg</th>
-              <th>GPU Mem</th>
+                                                        <th>GPU Avg</th>
+                                                        <th>GPU Mem</th>
+                                                        <th>Mem Δ/Task</th>
               <th style="text-align: right">Actions</th>
             </tr>
           </thead>
@@ -703,7 +746,9 @@ class ReportWriter:
                                 const gpuMemUsedMax = sys.gpu_mem_used_mb?.max;
                                 const gpuMemTotal = sys.gpu_mem_total_mb;
         
-        const tr = document.createElement('tr');
+                                const memPerTaskGb = r.mem?.per_task_gb != null ? r.mem.per_task_gb : null;
+
+                                const tr = document.createElement('tr');
         tr.innerHTML = `
           <td><b style="color: #fff">${r.concurrency}</b></td>
           <td>
@@ -722,6 +767,7 @@ class ReportWriter:
                                         <td>${(memUsedAvg != null && memTotal != null) ? `${(memUsedAvg/1024).toFixed(1)}/${(memTotal/1024).toFixed(1)} GB` : '-'}</td>
                                         <td>${gpuAvg != null ? (fmt.float(gpuAvg, 1) + '%') : '-'}</td>
                                         <td>${(gpuMemUsedMax != null && gpuMemTotal != null) ? `${(gpuMemUsedMax/1024).toFixed(1)}/${(gpuMemTotal/1024).toFixed(1)} GB` : (gpuMemUsedMax != null ? (gpuMemUsedMax/1024).toFixed(1) + ' GB' : '-')}</td>
+                                        <td>${memPerTaskGb != null ? (memPerTaskGb.toFixed(3) + ' GB/task') : '-'}</td>
           <td style="text-align: right">
             <button class="btn btn-outline" onclick="openStepDetail(${idx})">View Details</button>
           </td>
@@ -775,8 +821,9 @@ class ReportWriter:
     function initMainChart() {
       const chart = echarts.init(el('mainChart'));
       const xData = results.map(r => r.concurrency);
-      const yDur = results.map(r => r.metrics?.avg_duration);
-      const yFail = results.map(r => (r.metrics?.failure_rate || 0) * 100);
+        const yDur = results.map(r => r.metrics?.avg_duration);
+        const yFail = results.map(r => (r.metrics?.failure_rate || 0) * 100);
+        const yMem = results.map(r => (r.mem?.delta_mb != null ? (r.mem.delta_mb / 1024) : null));
       
       chart.setOption({
         backgroundColor: 'transparent',
@@ -784,13 +831,15 @@ class ReportWriter:
         legend: { textStyle: { color: '#94a3b8' } },
         grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
         xAxis: { type: 'category', data: xData, axisLabel: { color: '#94a3b8' } },
-        yAxis: [
-          { type: 'value', name: 'Duration (s)', splitLine: { lineStyle: { color: '#334155' } }, axisLabel: { color: '#94a3b8' } },
-          { type: 'value', name: 'Failure (%)', max: 100, position: 'right', axisLabel: { color: '#94a3b8' } }
-        ],
+                                yAxis: [
+                                        { type: 'value', name: 'Duration (s)', splitLine: { lineStyle: { color: '#334155' } }, axisLabel: { color: '#94a3b8' } },
+                                        { type: 'value', name: 'Failure (%)', max: 100, position: 'right', axisLabel: { color: '#94a3b8' } },
+                                        { type: 'value', name: 'Mem Δ (GB)', position: 'right', offset: 60, axisLabel: { color: '#94a3b8' }, splitLine: { show: false } }
+                                ],
         series: [
           { name: 'Avg Duration', type: 'line', data: yDur, smooth: true, itemStyle: { color: '#38bdf8' } },
-          { name: 'Failure Rate', type: 'line', yAxisIndex: 1, data: yFail, smooth: true, itemStyle: { color: '#f87171' }, areaStyle: { opacity: 0.1 } }
+                                        { name: 'Failure Rate', type: 'line', yAxisIndex: 1, data: yFail, smooth: true, itemStyle: { color: '#f87171' }, areaStyle: { opacity: 0.1 } },
+                                        { name: 'Mem Δ', type: 'line', yAxisIndex: 2, data: yMem, smooth: true, itemStyle: { color: '#a78bfa' } }
         ]
       });
       window.addEventListener('resize', () => chart.resize());

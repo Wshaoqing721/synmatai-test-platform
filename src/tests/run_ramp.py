@@ -4,6 +4,8 @@ import threading
 import base64
 import json
 import time
+import os
+import signal
 from pathlib import Path
 
 from tests.config import (
@@ -29,7 +31,7 @@ def _b64json_decode(s: str):
 # =========================
 # 并发爬坡配置
 # =========================
-CONCURRENCY_STEPS = [2,4]
+CONCURRENCY_STEPS = [1,2,4,8]
 FAILURE_RATE_THRESHOLD = 0.01
 
 
@@ -85,6 +87,7 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
         *locust_cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
 
     assert proc.stdout is not None
@@ -158,7 +161,10 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
 
         if should_stop:
             if proc.returncode is None:
-                proc.terminate()
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except Exception:
+                    proc.terminate()
             break
 
     if proc.returncode is None:
@@ -166,7 +172,10 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
             try:
                 await asyncio.wait_for(proc.wait(), timeout=10)
             except asyncio.TimeoutError:
-                proc.kill()
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    proc.kill()
                 await proc.wait()
         else:
             await proc.wait()
