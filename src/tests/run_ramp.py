@@ -54,6 +54,9 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager):
 
     assert proc.stdout is not None
 
+    done_count = 0
+    should_stop = False
+
     async for raw in proc.stdout:
         line = raw.decode().strip()
         if not line:
@@ -84,8 +87,23 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager):
         elif line.startswith("[TASK_DONE]"):
             _, task_id, ts, success = line.split()
             tm.on_finish(task_id, float(ts), success == "True")
+            done_count += 1
 
-    await proc.wait()
+            if done_count >= concurrency:
+                should_stop = True
+                if proc.returncode is None:
+                    proc.terminate()
+                break
+
+    if proc.returncode is None:
+        if should_stop:
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+        else:
+            await proc.wait()
     print("🏁 Locust finished")
 
 
