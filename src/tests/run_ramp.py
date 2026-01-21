@@ -3,6 +3,7 @@ import sys
 import threading
 import base64
 import json
+import time
 from pathlib import Path
 
 from tests.config import (
@@ -124,6 +125,25 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
             tm.on_finish(task_id, float(ts), success == "True")
 
             # ========= 达到完成数阈值则提前结束本档位 =========
+            done_count += 1
+            if done_count >= concurrency:
+                print(f"✅ Reached done_count={concurrency}, stop current step")
+                should_stop = True
+
+        elif line.startswith("[TASK_TIMEOUT]"):
+            _, task_id = line.split(maxsplit=1)
+            tm.on_finish(task_id, time.time(), success=False)
+            done_count += 1
+            if done_count >= concurrency:
+                print(f"✅ Reached done_count={concurrency}, stop current step")
+                should_stop = True
+
+        elif line.startswith("[TASK_ERROR]"):
+            # 格式: [TASK_ERROR] trace_id message...
+            parts = line.split(maxsplit=2)
+            trace_id = parts[1] if len(parts) > 1 else f"error_{done_count}"
+            tm.on_submit(trace_id, time.time())
+            tm.on_finish(trace_id, time.time(), success=False)
             done_count += 1
             if done_count >= concurrency:
                 print(f"✅ Reached done_count={concurrency}, stop current step")
