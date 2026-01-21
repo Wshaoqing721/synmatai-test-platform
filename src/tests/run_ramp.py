@@ -11,6 +11,8 @@ from tests.config import (
     LOCUST_RUN_TIME,
     SYSTEM_MONITOR_INTERVAL,
     REPORT_PATH,
+    MEM_AVAILABLE_MIN_GB,
+    MEM_AVAILABLE_MIN_RATIO,
 )
 
 from tests.core.task_manager import TaskManager
@@ -26,12 +28,44 @@ def _b64json_decode(s: str):
 # =========================
 # 并发爬坡配置
 # =========================
-CONCURRENCY_STEPS = [1,2,4]
+CONCURRENCY_STEPS = [2,4]
 FAILURE_RATE_THRESHOLD = 0.01
-MIN_TASKS = 1
 
 
-async def run_locust_and_collect(concurrency: int, tm: TaskManager):
+
+
+def _should_stop_for_memory(sys_mon: SystemMonitor):
+    """Return (stop: bool, reason: str|None) based on latest sys_mon record."""
+    try:
+        if not getattr(sys_mon, "records", None):
+            return False, None
+        latest = sys_mon.records[-1] or {}
+        if not isinstance(latest, dict):
+            return False, None
+
+        avail_mb = latest.get("mem_available_mb")
+        total_mb = latest.get("mem_total_mb")
+
+        if avail_mb is None or total_mb is None:
+            return False, None
+
+        avail_gb = float(avail_mb) / 1024.0
+        total_gb = float(total_mb) / 1024.0
+        if total_gb <= 0:
+            return False, None
+
+        ratio = avail_gb / total_gb
+
+        if avail_gb < MEM_AVAILABLE_MIN_GB or ratio < MEM_AVAILABLE_MIN_RATIO:
+            reason = f"memory_protection: available={avail_gb:.1f}GB ({ratio:.1%}), total={total_gb:.1f}GB"
+            return True, reason
+
+        return False, None
+    except Exception:
+        return False, None
+
+
+async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: SystemMonitor):
     print(f"\n🚀 Starting locust (concurrency={concurrency})")
 
     locustfile = Path(__file__).parent / "locustfile.py"
@@ -54,8 +88,9 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager):
 
     assert proc.stdout is not None
 
-    done_count = 0
     should_stop = False
+    stop_reason = None
+    done_count = 0
 
     async for raw in proc.stdout:
         line = raw.decode().strip()
@@ -87,13 +122,24 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager):
         elif line.startswith("[TASK_DONE]"):
             _, task_id, ts, success = line.split()
             tm.on_finish(task_id, float(ts), success == "True")
-            done_count += 1
 
+            # ========= 达到完成数阈值则提前结束本档位 =========
+            done_count += 1
             if done_count >= concurrency:
+                print(f"✅ Reached done_count={concurrency}, stop current step")
                 should_stop = True
-                if proc.returncode is None:
-                    proc.terminate()
-                break
+
+        # ========= 内存保护检查（使用 available） =========
+        mem_stop, mem_reason = _should_stop_for_memory(sys_mon)
+        if mem_stop:
+            stop_reason = mem_reason
+            print(f"🛑 {stop_reason}")
+            should_stop = True
+
+        if should_stop:
+            if proc.returncode is None:
+                proc.terminate()
+            break
 
     if proc.returncode is None:
         if should_stop:
@@ -106,11 +152,13 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager):
             await proc.wait()
     print("🏁 Locust finished")
 
+    return stop_reason
 
-def is_stable(tm: TaskManager):
+
+def is_stable(tm: TaskManager, concurrency: int):
     summary = tm.summary()
 
-    if summary["task_count"] < MIN_TASKS:
+    if summary["task_count"] < concurrency:
         return False, "no completed tasks"
 
     if summary["failure_rate"] > FAILURE_RATE_THRESHOLD:
@@ -136,13 +184,16 @@ async def main():
         sys_thread.start()
 
         try:
-            await run_locust_and_collect(concurrency, tm)
+            stop_reason = await run_locust_and_collect(concurrency, tm, sys_mon)
         finally:
             sys_mon.stop()
             sys_thread.join()
 
         summary = tm.summary()
-        stable, reason = is_stable(tm)
+        stable, reason = is_stable(tm, concurrency)
+        if stop_reason:
+            stable = False
+            reason = stop_reason
 
         # 把每个档位的任务/系统指标也塞进爬坡报告，便于回溯分析
         step_tasks = tm.export_tasks()

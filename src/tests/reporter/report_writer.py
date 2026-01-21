@@ -176,10 +176,84 @@ class ReportWriter:
                                 "max": round_s(max(vv), 2),
                         }
 
+                # --- host/server static info (best-effort) ---
+                host = None
+                for m in records:
+                        if isinstance(m, dict) and isinstance(m.get("server_info"), dict):
+                                host = dict(m.get("server_info") or {})
+                                break
+
+                gpu_info = None
+                for m in records:
+                        if isinstance(m, dict) and isinstance(m.get("gpu_info"), list):
+                                gpu_info = m.get("gpu_info")
+                                break
+
+                # --- normalize metrics ---
                 cpu = [m.get("cpu") for m in records]
-                mem = [m.get("mem") for m in records]
-                gpu = [m.get("gpu") for m in records]
-                gpu_mem = [m.get("gpu_mem") for m in records]
+
+                # memory: prefer used/total; fallback to percent
+                mem_total_mb = None
+                for m in records:
+                        mt = m.get("mem_total_mb")
+                        if mt is not None:
+                                try:
+                                        mem_total_mb = float(mt)
+                                        break
+                                except Exception:
+                                        pass
+                mem_used_mb = []
+                for m in records:
+                        if m.get("mem_used_mb") is not None:
+                                mem_used_mb.append(m.get("mem_used_mb"))
+                        else:
+                                # derive used from percent if possible
+                                pct = m.get("mem_pct") if m.get("mem_pct") is not None else m.get("mem")
+                                if pct is not None and mem_total_mb is not None:
+                                        try:
+                                                mem_used_mb.append(float(pct) / 100.0 * float(mem_total_mb))
+                                        except Exception:
+                                                mem_used_mb.append(None)
+                                else:
+                                        mem_used_mb.append(None)
+
+                # GPU: support both legacy scalar and new per-GPU lists
+                gpu_utils_list = []
+                gpu_mem_used_list = []
+                gpu_mem_total_list = []
+                for m in records:
+                        gpu_utils_list.append(m.get("gpu_utils") if isinstance(m.get("gpu_utils"), list) else None)
+                        gpu_mem_used_list.append(m.get("gpu_mem_used_mb") if isinstance(m.get("gpu_mem_used_mb"), list) else None)
+                        gpu_mem_total_list.append(m.get("gpu_mem_total_mb") if isinstance(m.get("gpu_mem_total_mb"), list) else None)
+
+                # Aggregate GPU series (for summary/table)
+                gpu_bottleneck_pct = []
+                gpu_total_used_mb = []
+                gpu_total_mb = None
+
+                for i, m in enumerate(records):
+                        utils = gpu_utils_list[i]
+                        mem_u = gpu_mem_used_list[i]
+                        mem_t = gpu_mem_total_list[i]
+
+                        # determine total GPU memory once
+                        if gpu_total_mb is None and isinstance(mem_t, list):
+                                try:
+                                        gpu_total_mb = float(sum(float(x) for x in mem_t if x is not None))
+                                except Exception:
+                                        gpu_total_mb = None
+
+                        if isinstance(utils, list):
+                                vv = [float(x) for x in utils if x is not None]
+                                gpu_bottleneck_pct.append(max(vv) if vv else None)
+                        else:
+                                gpu_bottleneck_pct.append(m.get("gpu"))
+
+                        if isinstance(mem_u, list):
+                                vv = [float(x) for x in mem_u if x is not None]
+                                gpu_total_used_mb.append(sum(vv) if vv else None)
+                        else:
+                                gpu_total_used_mb.append(m.get("gpu_mem"))
 
                 base_ts = records[0].get("ts")
                 step = _pick_step(len(records), target_points=240)
@@ -189,29 +263,65 @@ class ReportWriter:
                                 continue
                         ts = m.get("ts")
                         rel = (float(ts) - float(base_ts)) if (ts is not None and base_ts is not None) else None
+
+                        # per-GPU timeline sample (list of dicts)
+                        gpus = None
+                        utils = m.get("gpu_utils") if isinstance(m.get("gpu_utils"), list) else None
+                        mem_u = m.get("gpu_mem_used_mb") if isinstance(m.get("gpu_mem_used_mb"), list) else None
+                        mem_t = m.get("gpu_mem_total_mb") if isinstance(m.get("gpu_mem_total_mb"), list) else None
+                        if isinstance(utils, list) or isinstance(mem_u, list) or isinstance(mem_t, list):
+                                max_len = max(len(utils or []), len(mem_u or []), len(mem_t or []))
+                                gpus = []
+                                for gi in range(max_len):
+                                        gpus.append({
+                                                "gpu_pct": (utils[gi] if utils and gi < len(utils) else None),
+                                                "gpu_mem_used_mb": (mem_u[gi] if mem_u and gi < len(mem_u) else None),
+                                                "gpu_mem_total_mb": (mem_t[gi] if mem_t and gi < len(mem_t) else None),
+                                        })
+
+                        # memory used in MB (prefer explicit; fallback percent)
+                        mu = m.get("mem_used_mb")
+                        if mu is None:
+                                pct = m.get("mem_pct") if m.get("mem_pct") is not None else m.get("mem")
+                                if pct is not None and mem_total_mb is not None:
+                                        try:
+                                                mu = float(pct) / 100.0 * float(mem_total_mb)
+                                        except Exception:
+                                                mu = None
+
                         timeline.append({
                                 "t_s": round_s(rel, 1),
                                 "cpu_pct": m.get("cpu"),
-                                "mem_pct": m.get("mem"),
+                                "mem_used_mb": round_s(mu, 1) if mu is not None else None,
+                                "mem_total_mb": round_s(mem_total_mb, 1) if mem_total_mb is not None else None,
+                                # legacy single-GPU keys kept for compatibility
                                 "gpu_pct": m.get("gpu"),
                                 "gpu_mem_mb": m.get("gpu_mem"),
+                                # new multi-GPU
+                                "gpus": gpus,
                         })
 
                 return {
                         "gpu_available": gpu_available,
                         "gpu_reason": gpu_reason,
+                        "host": host,
+                        "gpus": gpu_info,
                         "units": {
                                 "t_s": "s",
                                 "cpu_pct": "%",
-                                "mem_pct": "%",
+                                "mem_used_mb": "MB",
+                                "mem_total_mb": "MB",
                                 "gpu_pct": "%",
-                                "gpu_mem_mb": "MB",
+                                "gpu_mem_used_mb": "MB",
+                                "gpu_mem_total_mb": "MB",
                         },
                         "summary": {
                                 "cpu_pct": stats(cpu),
-                                "mem_pct": stats(mem),
-                                "gpu_pct": stats(gpu),
-                                "gpu_mem_mb": stats(gpu_mem),
+                                "mem_used_mb": stats(mem_used_mb),
+                                "mem_total_mb": round_s(mem_total_mb, 1) if mem_total_mb is not None else None,
+                                "gpu_pct": stats(gpu_bottleneck_pct),
+                                "gpu_mem_used_mb": stats(gpu_total_used_mb),
+                                "gpu_mem_total_mb": round_s(gpu_total_mb, 1) if gpu_total_mb is not None else None,
                         },
                         "timeline": timeline,
                 }
@@ -240,15 +350,8 @@ class ReportWriter:
                 if self.sys_monitor:
                         raw = getattr(self.sys_monitor, "records", None) or getattr(self.sys_monitor, "metrics", [])
                         for m in (raw or []):
-                                system_metrics.append({
-                                        "ts": m.get("ts"),
-                                        "cpu": m.get("cpu"),
-                                        "mem": m.get("mem"),          # percent
-                                        "gpu": m.get("gpu"),          # util %
-                                        "gpu_mem": m.get("gpu_mem"),  # MB
-                                        "gpu_available": m.get("gpu_available"),
-                                        "gpu_reason": m.get("gpu_reason"),
-                                })
+                                # Keep all fields to support richer reporting (multi-GPU, totals, server info)
+                                system_metrics.append(dict(m) if isinstance(m, dict) else m)
 
                 system_metrics_v2 = self.summarize_system_metrics(system_metrics)
 
@@ -256,6 +359,8 @@ class ReportWriter:
                         "meta": {
                                 "generated_at": ts_to_str(datetime.now().timestamp()),
                                 "schema_version": 2,
+                                "server": (system_metrics_v2 or {}).get("host"),
+                                "gpus": (system_metrics_v2 or {}).get("gpus"),
                         },
                         # legacy keys (keep)
                         "tasks": tasks,
@@ -317,6 +422,14 @@ class ReportWriter:
                         },
                 }
 
+                # Attach server info (best-effort) from first step that has it
+                for r in enriched_results:
+                        sm2 = r.get("system_metrics_v2") if isinstance(r, dict) else None
+                        if isinstance(sm2, dict) and (sm2.get("host") or sm2.get("gpus")):
+                                report["meta"]["server"] = sm2.get("host")
+                                report["meta"]["gpus"] = sm2.get("gpus")
+                                break
+
                 path.parent.mkdir(parents=True, exist_ok=True)
 
                 with open(path, "w", encoding="utf-8") as f:
@@ -356,7 +469,7 @@ class ReportWriter:
     .stat-value { font-size: 32px; font-weight: 700; color: #fff; }
     .stat-label { font-size: 13px; color: var(--text-dim); }
     
-    .chart { width: 100%; height: 400px; }
+    .chart { width: 100%; height: 300px; }
     
     table { width: 100%; border-collapse: collapse; font-size: 14px; }
     th { text-align: left; padding: 12px 16px; background: rgba(0,0,0,0.2); color: var(--text-dim); font-weight: 600; }
@@ -414,6 +527,15 @@ class ReportWriter:
       </div>
     </div>
 
+                <!-- Server Info -->
+                <div class="card" style="margin-bottom: 24px;">
+                        <div style="display:flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                                <h3>Server Info</h3>
+                                <div style="font-size: 12px; color: var(--text-dim);" id="serverInfoHint">-</div>
+                        </div>
+                        <div class="metric-grid" id="serverInfoGrid"></div>
+                </div>
+
     <!-- Summary Cards -->
     <div class="grid">
       <div class="card">
@@ -455,7 +577,10 @@ class ReportWriter:
               <th>Success Rate</th>
               <th>Avg Latency</th>
               <th>Avg Queue</th>
-              <th>GPU Util (Max)</th>
+              <th>CPU Avg</th>
+              <th>Mem Avg</th>
+              <th>GPU Avg</th>
+              <th>GPU Mem</th>
               <th style="text-align: right">Actions</th>
             </tr>
           </thead>
@@ -563,6 +688,8 @@ class ReportWriter:
                        results.reduce((acc, r) => acc + (r.metrics?.task_count || 0), 1);
       el('failureRate').textContent = fmt.pct(failRate);
 
+        renderServerInfo();
+
       // Render Main Table
       const tbody = el('stepsTableBody');
       tbody.innerHTML = '';
@@ -570,7 +697,11 @@ class ReportWriter:
       results.forEach((r, idx) => {
         const metrics = r.metrics || {};
         const sys = (r.system_metrics_v2?.summary) || {};
-        const gpuMax = sys.gpu_pct?.max;
+                                const memUsedAvg = sys.mem_used_mb?.avg;
+                                const memTotal = sys.mem_total_mb;
+                                const gpuAvg = sys.gpu_pct?.avg;
+                                const gpuMemUsedMax = sys.gpu_mem_used_mb?.max;
+                                const gpuMemTotal = sys.gpu_mem_total_mb;
         
         const tr = document.createElement('tr');
         tr.innerHTML = `
@@ -587,7 +718,10 @@ class ReportWriter:
           </td>
           <td>${fmt.float(metrics.avg_duration, 3)}s</td>
           <td>${fmt.float(metrics.avg_queue_time, 3)}s</td>
-          <td>${fmt.pct(gpuMax/100)}</td>
+          <td>${fmt.float(sys.cpu_pct?.avg, 1)}%</td>
+                                        <td>${(memUsedAvg != null && memTotal != null) ? `${(memUsedAvg/1024).toFixed(1)}/${(memTotal/1024).toFixed(1)} GB` : '-'}</td>
+                                        <td>${gpuAvg != null ? (fmt.float(gpuAvg, 1) + '%') : '-'}</td>
+                                        <td>${(gpuMemUsedMax != null && gpuMemTotal != null) ? `${(gpuMemUsedMax/1024).toFixed(1)}/${(gpuMemTotal/1024).toFixed(1)} GB` : (gpuMemUsedMax != null ? (gpuMemUsedMax/1024).toFixed(1) + ' GB' : '-')}</td>
           <td style="text-align: right">
             <button class="btn btn-outline" onclick="openStepDetail(${idx})">View Details</button>
           </td>
@@ -601,6 +735,42 @@ class ReportWriter:
       el('taskSearch').addEventListener('input', renderTaskList);
       el('taskFilter').addEventListener('change', renderTaskList);
     }
+
+                function renderServerInfo() {
+                        const server = meta.server || {};
+                        const gpus = meta.gpus || [];
+                        const grid = el('serverInfoGrid');
+                        if (!grid) return;
+                        grid.innerHTML = '';
+
+                        const add = (label, val) => {
+                                const div = document.createElement('div');
+                                div.className = 'metric-box';
+                                div.innerHTML = `<label>${label}</label><div>${val ?? '-'}</div>`;
+                                grid.appendChild(div);
+                        };
+
+                        add('Hostname', server.hostname);
+                        add('OS', server.os);
+                        add('Python', server.python);
+                        add('CPU', server.cpu_model);
+                        add('CPU Cores (L/P)', (server.cpu_logical_cores != null || server.cpu_physical_cores != null) ? `${server.cpu_logical_cores ?? '-'} / ${server.cpu_physical_cores ?? '-'}` : '-');
+                        add('Memory Total', server.mem_total_mb != null ? `${(server.mem_total_mb/1024).toFixed(1)} GB` : '-');
+
+                        if (Array.isArray(gpus) && gpus.length) {
+                                add('GPU Count', gpus.length);
+                                gpus.forEach((g) => {
+                                        add(`GPU${g.index} Name`, g.name);
+                                        add(`GPU${g.index} Mem`, g.mem_total_mb != null ? `${(g.mem_total_mb/1024).toFixed(1)} GB` : '-');
+                                        if (g.driver_version) add(`GPU${g.index} Driver`, g.driver_version);
+                                });
+                                const hint = el('serverInfoHint');
+                                if (hint) hint.textContent = `Detected ${gpus.length} GPU(s)`;
+                        } else {
+                                const hint = el('serverInfoHint');
+                                if (hint) hint.textContent = 'No GPU info';
+                        }
+                }
 
     function initMainChart() {
       const chart = echarts.init(el('mainChart'));
@@ -670,10 +840,12 @@ class ReportWriter:
       addMetric('Failure Count', m.failure_count);
       
       // System
-      addMetric('Max CPU', fmt.pct((sys.cpu_pct?.max||0)/100));
-      addMetric('Max Memory', fmt.pct((sys.mem_pct?.max||0)/100));
-      addMetric('Max GPU Util', fmt.pct((sys.gpu_pct?.max||0)/100));
-      addMetric('Max GPU Mem', fmt.float(sys.gpu_mem_mb?.max, 0) + ' MB');
+        addMetric('Max CPU', sys.cpu_pct?.max != null ? (fmt.float(sys.cpu_pct.max, 1) + '%') : '-');
+        addMetric('Max Memory Used', sys.mem_used_mb?.max != null ? ((sys.mem_used_mb.max/1024).toFixed(1) + ' GB') : '-');
+        addMetric('Memory Total', sys.mem_total_mb != null ? ((sys.mem_total_mb/1024).toFixed(1) + ' GB') : '-');
+        addMetric('Max GPU Util', sys.gpu_pct?.max != null ? (fmt.float(sys.gpu_pct.max, 1) + '%') : '-');
+        addMetric('Max GPU Mem Used', sys.gpu_mem_used_mb?.max != null ? ((sys.gpu_mem_used_mb.max/1024).toFixed(1) + ' GB') : '-');
+        addMetric('GPU Mem Total', sys.gpu_mem_total_mb != null ? ((sys.gpu_mem_total_mb/1024).toFixed(1) + ' GB') : '-');
 
       const modal = el('detailModal');
       if (modal) {
@@ -692,10 +864,27 @@ class ReportWriter:
       setTimeout(() => renderMetricCharts(step), 100);
     };
 
-    window.closeModal = function() {
-      el('detailModal').classList.remove('active');
-      document.body.style.overflow = '';
-    };
+                window.closeModal = function() {
+                        const modal = el('detailModal');
+                        if (modal) {
+                                modal.classList.remove('active');
+                                modal.style.display = 'none';
+                        }
+                        document.body.style.overflow = '';
+                };
+
+                // Click outside modal to close
+                el('detailModal').addEventListener('click', (e) => {
+                        if (e.target && e.target.id === 'detailModal') closeModal();
+                });
+
+                // ESC to close
+                document.addEventListener('keydown', (e) => {
+                        if (e.key === 'Escape') {
+                                const modal = el('detailModal');
+                                if (modal && modal.style.display === 'flex') closeModal();
+                        }
+                });
 
     window.switchTab = function(tabId) {
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -809,26 +998,134 @@ class ReportWriter:
         el('metricChartCpu').innerHTML = '<div style="text-align:center; padding:40px; color:#666">No system metrics</div>';
         return;
       }
-      
-      const times = timeline.map(t => new Date(t.ts * 1000).toLocaleTimeString());
-      
-      const createChart = (id, label, data, color) => {
-        const chart = echarts.init(el(id));
-        chart.setOption({
-          title: { text: label, textStyle: { color: '#94a3b8', fontSize: 13 } },
-          tooltip: { trigger: 'axis' },
-          grid: { left: 40, right: 20, top: 40, bottom: 20 },
-          xAxis: { type: 'category', data: times, show: false },
-          yAxis: { type: 'value', splitLine: { lineStyle: { color: '#334155' } } },
-          series: [{ type: 'line', data: data, showSymbol: false, itemStyle: { color: color }, areaStyle: { opacity: 0.1 } }]
-        });
-        return chart;
-      };
-      
-      createChart('metricChartCpu', 'CPU (%)', timeline.map(t => t.cpu), '#38bdf8');
-      createChart('metricChartMem', 'Memory (%)', timeline.map(t => t.mem), '#a78bfa');
-      createChart('metricChartGpu', 'GPU (%)', timeline.map(t => t.gpu), '#4ade80');
-      createChart('metricChartGpuMem', 'GPU Mem (MB)', timeline.map(t => t.gpu_mem), '#fbbf24');
+
+                        const maxT = Math.max(...timeline.map(t => (typeof t.t_s === 'number' ? t.t_s : 0)));
+                        const useMinutes = maxT >= 120;
+                        const xVals = timeline.map(t => {
+                                const ts = (typeof t.t_s === 'number' ? t.t_s : 0);
+                                return useMinutes ? (ts / 60).toFixed(1) : ts.toFixed(0);
+                        });
+                        const xLabel = useMinutes ? 'min' : 's';
+
+                        const createChart = (id, option) => {
+                                const node = el(id);
+                                if (!node) return null;
+                                const chart = echarts.init(node);
+                                chart.setOption(option);
+                                return chart;
+                        };
+
+                        // CPU (0-100%)
+                        createChart('metricChartCpu', {
+                                title: { text: 'CPU (%)', textStyle: { color: '#94a3b8', fontSize: 13 } },
+                                tooltip: { trigger: 'axis' },
+                                grid: { left: 52, right: 20, top: 40, bottom: 28 },
+                                xAxis: { type: 'category', data: xVals, name: xLabel, nameTextStyle: { color: '#94a3b8' }, axisLabel: { show: false } },
+                                yAxis: { type: 'value', min: 0, max: 100, splitLine: { lineStyle: { color: '#334155' } }, axisLabel: { color: '#94a3b8' } },
+                                series: [{ type: 'line', data: timeline.map(t => t.cpu_pct), showSymbol: false, itemStyle: { color: '#38bdf8' }, areaStyle: { opacity: 0.08 } }]
+                        });
+
+                        // Memory: prefer used (MB) with y max total; fallback to percent
+                        const memTotal = timeline.find(t => t.mem_total_mb != null)?.mem_total_mb;
+                        const memUsedSeries = timeline.map(t => (t.mem_used_mb != null ? t.mem_used_mb : null));
+                        const hasMemUsed = memUsedSeries.some(v => typeof v === 'number');
+                        if (typeof memTotal === 'number' && hasMemUsed) {
+                                createChart('metricChartMem', {
+                                        title: { text: 'Memory Used (GB)', textStyle: { color: '#94a3b8', fontSize: 13 } },
+                                        tooltip: { trigger: 'axis' },
+                                        grid: { left: 64, right: 20, top: 40, bottom: 28 },
+                                        xAxis: { type: 'category', data: xVals, name: xLabel, nameTextStyle: { color: '#94a3b8' }, axisLabel: { show: false } },
+                                        yAxis: {
+                                                type: 'value',
+                                                min: 0,
+                                                max: memTotal,
+                                                axisLabel: { formatter: (v) => (v / 1024).toFixed(0), color: '#94a3b8' },
+                                                splitLine: { lineStyle: { color: '#334155' } }
+                                        },
+                                        series: [{ type: 'line', data: memUsedSeries, showSymbol: false, itemStyle: { color: '#a78bfa' }, areaStyle: { opacity: 0.08 } }]
+                                });
+                        } else {
+                                createChart('metricChartMem', {
+                                        title: { text: 'Memory (%)', textStyle: { color: '#94a3b8', fontSize: 13 } },
+                                        tooltip: { trigger: 'axis' },
+                                        grid: { left: 52, right: 20, top: 40, bottom: 28 },
+                                        xAxis: { type: 'category', data: xVals, name: xLabel, nameTextStyle: { color: '#94a3b8' }, axisLabel: { show: false } },
+                                        yAxis: { type: 'value', min: 0, max: 100, splitLine: { lineStyle: { color: '#334155' } }, axisLabel: { color: '#94a3b8' } },
+                                        series: [{ type: 'line', data: timeline.map(t => t.mem_pct), showSymbol: false, itemStyle: { color: '#a78bfa' }, areaStyle: { opacity: 0.08 } }]
+                                });
+                        }
+
+                        // GPU util (multi series), 0-100
+                        const gpuCount = Math.max(...timeline.map(t => (Array.isArray(t.gpus) ? t.gpus.length : 0)));
+                        const colors = ['#4ade80','#38bdf8','#a78bfa','#fbbf24','#f87171','#60a5fa'];
+
+                        const gpuSeries = [];
+                        for (let i = 0; i < gpuCount; i++) {
+                                gpuSeries.push({
+                                        name: `GPU${i}`,
+                                        type: 'line',
+                                        showSymbol: false,
+                                        data: timeline.map(t => (t.gpus && t.gpus[i] ? t.gpus[i].gpu_pct : null)),
+                                        itemStyle: { color: colors[i % colors.length] },
+                                        areaStyle: { opacity: 0.02 },
+                                });
+                        }
+                        if (gpuSeries.length === 0) {
+                                gpuSeries.push({
+                                        name: 'GPU',
+                                        type: 'line',
+                                        showSymbol: false,
+                                        data: timeline.map(t => t.gpu_pct),
+                                        itemStyle: { color: '#4ade80' },
+                                        areaStyle: { opacity: 0.02 },
+                                });
+                        }
+
+                        createChart('metricChartGpu', {
+                                title: { text: 'GPU Util (%)', textStyle: { color: '#94a3b8', fontSize: 13 } },
+                                tooltip: { trigger: 'axis' },
+                                legend: { textStyle: { color: '#94a3b8' }, top: 18 },
+                                grid: { left: 52, right: 20, top: 60, bottom: 28 },
+                                xAxis: { type: 'category', data: xVals, name: xLabel, nameTextStyle: { color: '#94a3b8' }, axisLabel: { show: false } },
+                                yAxis: { type: 'value', min: 0, max: 100, splitLine: { lineStyle: { color: '#334155' } }, axisLabel: { color: '#94a3b8' } },
+                                series: gpuSeries,
+                        });
+
+                        // GPU memory used (stacked), y max = total GPU mem across server
+                        const gpuMemTotal = timeline.find(t => Array.isArray(t.gpus) && t.gpus.some(g => g && g.gpu_mem_total_mb != null))?.gpus
+                                ?.reduce((acc, g) => acc + (g?.gpu_mem_total_mb || 0), 0);
+
+                        const gpuMemSeries = [];
+                        for (let i = 0; i < gpuCount; i++) {
+                                gpuMemSeries.push({
+                                        name: `GPU${i}`,
+                                        type: 'line',
+                                        stack: 'mem',
+                                        showSymbol: false,
+                                        areaStyle: { opacity: 0.15 },
+                                        data: timeline.map(t => (t.gpus && t.gpus[i] ? t.gpus[i].gpu_mem_used_mb : null)),
+                                        itemStyle: { color: colors[i % colors.length] },
+                                });
+                        }
+                        if (gpuMemSeries.length === 0) {
+                                gpuMemSeries.push({ name: 'GPU Mem', type: 'line', showSymbol: false, data: timeline.map(t => t.gpu_mem_mb), itemStyle: { color: '#fbbf24' }, areaStyle: { opacity: 0.15 } });
+                        }
+
+                        createChart('metricChartGpuMem', {
+                                title: { text: 'GPU Mem Used (GB)', textStyle: { color: '#94a3b8', fontSize: 13 } },
+                                tooltip: { trigger: 'axis' },
+                                legend: { textStyle: { color: '#94a3b8' }, top: 18 },
+                                grid: { left: 64, right: 20, top: 60, bottom: 28 },
+                                xAxis: { type: 'category', data: xVals, name: xLabel, nameTextStyle: { color: '#94a3b8' }, axisLabel: { show: false } },
+                                yAxis: {
+                                        type: 'value',
+                                        min: 0,
+                                        max: (typeof gpuMemTotal === 'number' ? gpuMemTotal : null),
+                                        axisLabel: { formatter: (v) => (v / 1024).toFixed(0), color: '#94a3b8' },
+                                        splitLine: { lineStyle: { color: '#334155' } }
+                                },
+                                series: gpuMemSeries,
+                        });
     }
 
     // Start

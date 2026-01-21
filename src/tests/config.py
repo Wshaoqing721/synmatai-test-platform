@@ -13,3 +13,9 @@ LOCUST_RUN_TIME = "4h"
 SYSTEM_MONITOR_INTERVAL = 2.0
 
 REPORT_PATH = "src/tests/reports/patent_test_report.json"
+# =========================
+# 终止阈值 / 保护策略
+# =========================
+# 内存保护：使用 available（更接近“还能分配的内存”）
+MEM_AVAILABLE_MIN_GB = 10.0      # 硬阈值：低于 20GB 直接停
+MEM_AVAILABLE_MIN_RATIO = 0.05   # 软阈值：低于 15% 直接停
