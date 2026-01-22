@@ -15,7 +15,7 @@ POLL_INTERVAL = 5
 TASK_TIMEOUT = 3600
 
 
-class AgentUser(HttpUser):
+class BaseAsyncTaskUser(HttpUser):
     wait_time = constant(999999)  # 基本不会再跑第二次
 
     _finished_users = 0
@@ -36,20 +36,17 @@ class AgentUser(HttpUser):
         if self._active_task_id and not self._active_task_done:
             self._terminate_task(self._active_task_id)
 
-    @task
-    def run_agent_task(self):
-        if self._has_run:
-            # 只跑一次；其余时间保持 idle，让其它 user 有机会跑完
-            time.sleep(999999)
-            return
-
-        self._has_run = True
+    def _run_async_task(
+        self,
+        submit_path: str,
+        submit_payload: dict,
+        status_path_template: str,
+        submit_name: str,
+        poll_name: str,
+        submit_tag: str,
+    ):
         trace_id = str(uuid.uuid4())
         submit_ts = time.time()
-
-        payload = {
-            "user_question": "为了研发导热凝胶，整理分析类似产品的成分和工艺"
-        }
 
         task_id: str | None = None
         self._active_task_id = None
@@ -58,11 +55,11 @@ class AgentUser(HttpUser):
         try:
             # ---------- 提交任务 ----------
             with self.client.post(
-                "/v1/domain/run",
-                json=payload,
+                submit_path,
+                json=submit_payload,
                 headers={"X-Request-ID": trace_id},
                 catch_response=True,
-                name="submit_task",
+                name=submit_name,
             ) as resp:
                 if resp.status_code != 200:
                     err_msg = f"create task failed: {resp.status_code} - {resp.text}"
@@ -75,10 +72,10 @@ class AgentUser(HttpUser):
                 task_id = submit_resp["data"]["task_id"]
                 self._active_task_id = task_id
 
-            self._emit_json("TASK_PAYLOAD", task_id, payload)
+            self._emit_json("TASK_PAYLOAD", task_id, submit_payload)
             self._emit_json("TASK_SUBMIT_RESP", task_id, submit_resp)
 
-            print(f"[TASK_SUBMITTED] {task_id} agent {submit_ts}", flush=True)
+            print(f"[{submit_tag}_SUBMITTED] {task_id} {submit_ts}", flush=True)
 
             # ---------- 轮询状态 ----------
             start_ts = None
@@ -89,8 +86,8 @@ class AgentUser(HttpUser):
                 time.sleep(POLL_INTERVAL)
 
                 with self.client.get(
-                    f"/v1/task/status/{task_id}",
-                    name="poll_status",
+                    status_path_template.format(task_id=task_id),
+                    name=poll_name,
                     catch_response=True,
                 ) as r:
                     if r.status_code != 200:
@@ -102,22 +99,23 @@ class AgentUser(HttpUser):
 
                     if status == "RUNNING" and not start_ts:
                         start_ts = time.time()
-                        print(f"[TASK_RUNNING] {task_id} {start_ts}", flush=True)
+                        print(f"[{submit_tag}_RUNNING] {task_id} {start_ts}", flush=True)
 
                     if status in ("FINISHED", "FAILED"):
                         end_ts = time.time()
                         success = status == "FINISHED"
                         self._active_task_done = True
                         self._emit_json("TASK_FINAL", task_id, data)
-                        print(f"[TASK_DONE] {task_id} {end_ts} {success}", flush=True)
+                        print(f"[{submit_tag}_DONE] {task_id} {end_ts} {success}", flush=True)
 
                         # 所有 user 都跑完就立刻结束压测（不等 --run-time）
                         self._mark_finished_and_maybe_quit()
                         return
 
             # ---------- 超时 ----------
-            self._terminate_task(task_id)
-            print(f"[TASK_TIMEOUT] {task_id}", flush=True)
+            if task_id:
+                self._terminate_task(task_id)
+            print(f"[{submit_tag}_TIMEOUT] {task_id}", flush=True)
 
             if last_data is not None:
                 self._emit_json("TASK_FINAL", task_id, last_data)
@@ -156,8 +154,8 @@ class AgentUser(HttpUser):
     def _mark_finished_and_maybe_quit(self):
         expected = self._expected_users() or 1
         with self._finished_lock:
-            AgentUser._finished_users += 1
-            done = AgentUser._finished_users
+            type(self)._finished_users += 1
+            done = type(self)._finished_users
 
         if done >= expected:
             try:
@@ -182,3 +180,57 @@ class AgentUser(HttpUser):
         except Exception:
             # 回收接口失败不应影响 locust 退出
             pass
+
+
+class AgentUser(BaseAsyncTaskUser):
+    @task
+    def run_agent_task(self):
+        if self._has_run:
+            # 只跑一次；其余时间保持 idle，让其它 user 有机会跑完
+            time.sleep(999999)
+            return
+
+        self._has_run = True
+
+        payload = {
+            "user_question": "面向电子与结构连接应用的胶黏剂专利布局及其对产业化工艺选择的影响"
+        }
+
+        self._run_async_task(
+            submit_path="/v1/domain/run",
+            submit_payload=payload,
+            status_path_template="/v1/task/status/{task_id}",
+            submit_name="submit_task",
+            poll_name="poll_status",
+            submit_tag="TASK",
+        )
+
+
+# class HeatmapUser(BaseAsyncTaskUser):
+#     @task
+#     def run_heatmap_task(self):
+#         if self._has_run:
+#             # 只跑一次；其余时间保持 idle，让其它 user 有机会跑完
+#             time.sleep(999999)
+#             return
+
+#         self._has_run = True
+
+#         payload = {
+#             "query_direction": "人工智能 大模型",
+#             "start_year": 2023,
+#             "end_year": 2025,
+#             "country": "WO",
+#             "keyword_num": 2,
+#             "async_mode": True,
+#             "output_subdir": "plots",
+#         }
+
+#         self._run_async_task(
+#             submit_path="/v1/plot/heatmap/run",
+#             submit_payload=payload,
+#             status_path_template="/v1/plot/task/status/{task_id}",
+#             submit_name="submit_heatmap_task",
+#             poll_name="poll_heatmap_status",
+#             submit_tag="HEATMAP",
+#         )
