@@ -18,6 +18,8 @@ TASK_TIMEOUT = 3600
 class BaseAsyncTaskUser(HttpUser):
     wait_time = constant(999999)  # 基本不会再跑第二次
 
+    abstract = True
+
     _finished_users = 0
     _finished_lock = threading.Lock()
 
