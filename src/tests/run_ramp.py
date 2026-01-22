@@ -7,6 +7,7 @@ import time
 import os
 import signal
 import random
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -45,7 +46,7 @@ def _resolve_report_path(report_path: str | Path) -> Path:
 # =========================
 # 并发爬坡配置
 # =========================
-CONCURRENCY_STEPS = [1,2,4,8]
+CONCURRENCY_STEPS = [1,2]
 FAILURE_RATE_THRESHOLD = 0.01
 
 
@@ -110,6 +111,8 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
     stop_reason = None
     done_count = 0
 
+    tag_pattern = re.compile(r"^\[(?P<tag>[A-Z0-9_]+)]\s+")
+
     async for raw in proc.stdout:
         line = raw.decode().strip()
         if not line:
@@ -117,29 +120,40 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
 
         print(line)
 
-        if line.startswith("[TASK_SUBMITTED]"):
-            _, task_id, _, ts = line.split()
-            tm.on_submit(task_id, float(ts))
+        tag_match = tag_pattern.match(line)
+        tag = tag_match.group("tag") if tag_match else ""
+        parts = line.split()
 
-        elif line.startswith("[TASK_PAYLOAD]"):
+        if tag.endswith("_SUBMITTED"):
+            if len(parts) >= 3:
+                task_id = parts[1]
+                ts = parts[-1]
+                tm.on_submit(task_id, float(ts))
+
+        elif tag == "TASK_PAYLOAD":
             _, task_id, b64 = line.split(maxsplit=2)
             tm.on_meta(task_id, payload=_b64json_decode(b64))
 
-        elif line.startswith("[TASK_SUBMIT_RESP]"):
+        elif tag == "TASK_SUBMIT_RESP":
             _, task_id, b64 = line.split(maxsplit=2)
             tm.on_meta(task_id, submit_resp=_b64json_decode(b64))
 
-        elif line.startswith("[TASK_FINAL]"):
+        elif tag == "TASK_FINAL":
             _, task_id, b64 = line.split(maxsplit=2)
             tm.on_meta(task_id, final=_b64json_decode(b64))
 
-        elif line.startswith("[TASK_RUNNING]"):
-            _, task_id, ts = line.split()
-            tm.on_start(task_id, float(ts))
+        elif tag.endswith("_RUNNING"):
+            if len(parts) >= 3:
+                task_id = parts[1]
+                ts = parts[-1]
+                tm.on_start(task_id, float(ts))
 
-        elif line.startswith("[TASK_DONE]"):
-            _, task_id, ts, success = line.split()
-            tm.on_finish(task_id, float(ts), success == "True")
+        elif tag.endswith("_DONE"):
+            if len(parts) >= 4:
+                task_id = parts[1]
+                ts = parts[2]
+                success = parts[3]
+                tm.on_finish(task_id, float(ts), success == "True")
 
             # ========= 达到完成数阈值则提前结束本档位 =========
             done_count += 1
@@ -147,7 +161,7 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
                 print(f"✅ Reached done_count={concurrency}, stop current step")
                 should_stop = True
 
-        elif line.startswith("[TASK_TIMEOUT]"):
+        elif tag.endswith("_TIMEOUT"):
             _, task_id = line.split(maxsplit=1)
             tm.on_finish(task_id, time.time(), success=False)
             done_count += 1
