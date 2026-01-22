@@ -148,12 +148,6 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
                 ts = parts[-1]
                 tm.on_start(task_id, float(ts))
 
-        elif tag.endswith("_DONE"):
-            if len(parts) >= 4:
-                task_id = parts[1]
-                ts = parts[2]
-                success = parts[3]
-                tm.on_finish(task_id, float(ts), success == "True")
         elif tag == "RUN_DONE":
             if len(parts) >= 3:
                 done_count += 1
@@ -161,14 +155,22 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
                     print(f"✅ Reached done_count={concurrency}, stop current step")
                     should_stop = True
 
-        elif tag.endswith("_TIMEOUT"):
-            _, task_id = line.split(maxsplit=1)
-            tm.on_finish(task_id, time.time(), success=False)
+        elif tag.endswith("_DONE"):
+            if len(parts) >= 4:
+                task_id = parts[1]
+                ts = parts[2]
+                success = parts[3]
+                tm.on_finish(task_id, float(ts), success == "True")
+
         elif tag == "RUN_TIMEOUT":
             done_count += 1
             if done_count >= concurrency:
                 print(f"✅ Reached done_count={concurrency}, stop current step")
                 should_stop = True
+
+        elif tag.endswith("_TIMEOUT"):
+            _, task_id = line.split(maxsplit=1)
+            tm.on_finish(task_id, time.time(), success=False)
 
         elif line.startswith("[TASK_ERROR]"):
             # 格式: [TASK_ERROR] trace_id message...

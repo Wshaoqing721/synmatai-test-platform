@@ -15,6 +15,36 @@ POLL_INTERVAL = 5
 TASK_TIMEOUT = 3600
 
 
+TASK_PIPELINE = [
+    {
+        "submit_path": "/v1/plot/heatmap/run",
+        "status_path_template": "/v1/plot/task/status/{task_id}",
+        "submit_name": "submit_heatmap_task",
+        "poll_name": "poll_heatmap_status",
+        "submit_tag": "HEATMAP",
+        "payload": {
+            "query_direction": "人工智能 大模型",
+            "start_year": 2023,
+            "end_year": 2025,
+            "country": "WO",
+            "keyword_num": 2,
+            "async_mode": True,
+            "output_subdir": "plots",
+        },
+    },
+    {
+        "submit_path": "/v1/domain/run",
+        "status_path_template": "/v1/task/status/{task_id}",
+        "submit_name": "submit_task",
+        "poll_name": "poll_status",
+        "submit_tag": "TASK",
+        "payload": {
+            "user_question": "面向电子与结构连接应用的胶黏剂专利布局及其对产业化工艺选择的影响"
+        },
+    },
+]
+
+
 class BaseAsyncTaskUser(HttpUser):
     wait_time = constant(999999)  # 基本不会再跑第二次
 
@@ -46,6 +76,7 @@ class BaseAsyncTaskUser(HttpUser):
         submit_name: str,
         poll_name: str,
         submit_tag: str,
+        auto_quit: bool = True,
         auto_quit: bool = True,
     ):
         trace_id = str(uuid.uuid4())
@@ -115,7 +146,7 @@ class BaseAsyncTaskUser(HttpUser):
                         if auto_quit:
                             print(f"[RUN_DONE] {task_id} {end_ts}", flush=True)
                             self._mark_finished_and_maybe_quit()
-                        return
+                        return task_id
 
             # ---------- 超时 ----------
             if task_id:
@@ -127,6 +158,7 @@ class BaseAsyncTaskUser(HttpUser):
             if auto_quit:
                 print(f"[RUN_TIMEOUT] {task_id} {time.time()}", flush=True)
                 self._mark_finished_and_maybe_quit()
+            return task_id
 
         except GreenletExit:
             # locust 到达 --run-time / 正在退出时会杀掉 greenlet；这里兜底 terminate
@@ -137,6 +169,8 @@ class BaseAsyncTaskUser(HttpUser):
             # 其它异常/中断也尽量回收
             if self._active_task_id and not self._active_task_done:
                 self._terminate_task(self._active_task_id)
+
+        return None
 
     def _emit_json(self, tag: str, task_id: str, obj):
         try:
@@ -188,104 +222,23 @@ class BaseAsyncTaskUser(HttpUser):
             # 回收接口失败不应影响 locust 退出
             pass
 
-########
-# 单任务执行器示例 注意：
-#######
-class AgentUser(BaseAsyncTaskUser):
+class PipelineUser(BaseAsyncTaskUser):
     @task
-    def run_agent_task(self):
+    def run_pipeline(self):
         if self._has_run:
-            # 只跑一次；其余时间保持 idle，让其它 user 有机会跑完
             time.sleep(999999)
             return
 
         self._has_run = True
 
-        payload = {
-            "user_question": "面向电子与结构连接应用的胶黏剂专利布局及其对产业化工艺选择的影响"
-        }
-
-        self._run_async_task(
-            submit_path="/v1/domain/run",
-            submit_payload=payload,
-            status_path_template="/v1/task/status/{task_id}",
-            submit_name="submit_task",
-            poll_name="poll_status",
-            submit_tag="TASK",
-        )
-
-
-class HeatmapUser(BaseAsyncTaskUser):
-    @task
-    def run_heatmap_task(self):
-        if self._has_run:
-            # 只跑一次；其余时间保持 idle，让其它 user 有机会跑完
-            time.sleep(999999)
-            return
-
-        self._has_run = True
-
-        payload = {
-            "query_direction": "人工智能 大模型",
-            "start_year": 2023,
-            "end_year": 2025,
-            "country": "WO",
-            "keyword_num": 2,
-            "async_mode": True,
-            "output_subdir": "plots",
-        }
-
-        self._run_async_task(
-            submit_path="/v1/plot/heatmap/run",
-            submit_payload=payload,
-            status_path_template="/v1/plot/task/status/{task_id}",
-            submit_name="submit_heatmap_task",
-            poll_name="poll_heatmap_status",
-            submit_tag="HEATMAP",
-        )
-
-
-
-# ######
-# 多任务执行器 注意：需注释掉上面的单任务执行器
-# # ######
-# class HeatmapThenAgentTasks(SequentialTaskSet):
-#     @task
-#     def run_heatmap_then_agent(self):
-#         payload = {
-#             "query_direction": "人工智能 大模型",
-#             "start_year": 2023,
-#             "end_year": 2025,
-#             "country": "WO",
-#             "keyword_num": 2,
-#             "async_mode": True,
-#             "output_subdir": "plots",
-#         }
-
-#         self.user._run_async_task(
-#             submit_path="/v1/plot/heatmap/run",
-#             submit_payload=payload,
-#             status_path_template="/v1/plot/task/status/{task_id}",
-#             submit_name="submit_heatmap_task",
-#             poll_name="poll_heatmap_status",
-#             submit_tag="HEATMAP",
-#             auto_quit=False,
-#         )
-
-#         payload = {
-#             "user_question": "面向电子与结构连接应用的胶黏剂专利布局及其对产业化工艺选择的影响"
-#         }
-
-#         self.user._run_async_task(
-#             submit_path="/v1/domain/run",
-#             submit_payload=payload,
-#             status_path_template="/v1/task/status/{task_id}",
-#             submit_name="submit_task",
-#             poll_name="poll_status",
-#             submit_tag="TASK",
-#             auto_quit=True,
-#         )
-
-
-# class HeatmapThenAgentUser(BaseAsyncTaskUser):
-#     tasks = [HeatmapThenAgentTasks]
+        last_index = len(TASK_PIPELINE) - 1
+        for idx, spec in enumerate(TASK_PIPELINE):
+            self._run_async_task(
+                submit_path=spec["submit_path"],
+                submit_payload=spec["payload"],
+                status_path_template=spec["status_path_template"],
+                submit_name=spec["submit_name"],
+                poll_name=spec["poll_name"],
+                submit_tag=spec["submit_tag"],
+                auto_quit=idx == last_index,
+            )
