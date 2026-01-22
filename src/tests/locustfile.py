@@ -1,4 +1,4 @@
-from locust import HttpUser, task, constant
+from locust import HttpUser, task, constant, SequentialTaskSet
 
 try:
     from gevent import GreenletExit
@@ -46,6 +46,7 @@ class BaseAsyncTaskUser(HttpUser):
         submit_name: str,
         poll_name: str,
         submit_tag: str,
+        auto_quit: bool = True,
     ):
         trace_id = str(uuid.uuid4())
         submit_ts = time.time()
@@ -111,7 +112,9 @@ class BaseAsyncTaskUser(HttpUser):
                         print(f"[{submit_tag}_DONE] {task_id} {end_ts} {success}", flush=True)
 
                         # 所有 user 都跑完就立刻结束压测（不等 --run-time）
-                        self._mark_finished_and_maybe_quit()
+                        if auto_quit:
+                            print(f"[RUN_DONE] {task_id} {end_ts}", flush=True)
+                            self._mark_finished_and_maybe_quit()
                         return
 
             # ---------- 超时 ----------
@@ -121,7 +124,9 @@ class BaseAsyncTaskUser(HttpUser):
 
             if last_data is not None:
                 self._emit_json("TASK_FINAL", task_id, last_data)
-            self._mark_finished_and_maybe_quit()
+            if auto_quit:
+                print(f"[RUN_TIMEOUT] {task_id} {time.time()}", flush=True)
+                self._mark_finished_and_maybe_quit()
 
         except GreenletExit:
             # locust 到达 --run-time / 正在退出时会杀掉 greenlet；这里兜底 terminate
@@ -183,7 +188,9 @@ class BaseAsyncTaskUser(HttpUser):
             # 回收接口失败不应影响 locust 退出
             pass
 
-
+########
+# 单任务执行器示例 注意：
+#######
 class AgentUser(BaseAsyncTaskUser):
     @task
     def run_agent_task(self):
@@ -208,16 +215,43 @@ class AgentUser(BaseAsyncTaskUser):
         )
 
 
-# class HeatmapUser(BaseAsyncTaskUser):
+class HeatmapUser(BaseAsyncTaskUser):
+    @task
+    def run_heatmap_task(self):
+        if self._has_run:
+            # 只跑一次；其余时间保持 idle，让其它 user 有机会跑完
+            time.sleep(999999)
+            return
+
+        self._has_run = True
+
+        payload = {
+            "query_direction": "人工智能 大模型",
+            "start_year": 2023,
+            "end_year": 2025,
+            "country": "WO",
+            "keyword_num": 2,
+            "async_mode": True,
+            "output_subdir": "plots",
+        }
+
+        self._run_async_task(
+            submit_path="/v1/plot/heatmap/run",
+            submit_payload=payload,
+            status_path_template="/v1/plot/task/status/{task_id}",
+            submit_name="submit_heatmap_task",
+            poll_name="poll_heatmap_status",
+            submit_tag="HEATMAP",
+        )
+
+
+
+# ######
+# 多任务执行器 注意：需注释掉上面的单任务执行器
+# # ######
+# class HeatmapThenAgentTasks(SequentialTaskSet):
 #     @task
-#     def run_heatmap_task(self):
-#         if self._has_run:
-#             # 只跑一次；其余时间保持 idle，让其它 user 有机会跑完
-#             time.sleep(999999)
-#             return
-
-#         self._has_run = True
-
+#     def run_heatmap_then_agent(self):
 #         payload = {
 #             "query_direction": "人工智能 大模型",
 #             "start_year": 2023,
@@ -228,11 +262,30 @@ class AgentUser(BaseAsyncTaskUser):
 #             "output_subdir": "plots",
 #         }
 
-#         self._run_async_task(
+#         self.user._run_async_task(
 #             submit_path="/v1/plot/heatmap/run",
 #             submit_payload=payload,
 #             status_path_template="/v1/plot/task/status/{task_id}",
 #             submit_name="submit_heatmap_task",
 #             poll_name="poll_heatmap_status",
 #             submit_tag="HEATMAP",
+#             auto_quit=False,
 #         )
+
+#         payload = {
+#             "user_question": "面向电子与结构连接应用的胶黏剂专利布局及其对产业化工艺选择的影响"
+#         }
+
+#         self.user._run_async_task(
+#             submit_path="/v1/domain/run",
+#             submit_payload=payload,
+#             status_path_template="/v1/task/status/{task_id}",
+#             submit_name="submit_task",
+#             poll_name="poll_status",
+#             submit_tag="TASK",
+#             auto_quit=True,
+#         )
+
+
+# class HeatmapThenAgentUser(BaseAsyncTaskUser):
+#     tasks = [HeatmapThenAgentTasks]

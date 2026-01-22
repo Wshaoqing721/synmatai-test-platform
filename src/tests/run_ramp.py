@@ -154,16 +154,17 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
                 ts = parts[2]
                 success = parts[3]
                 tm.on_finish(task_id, float(ts), success == "True")
-
-            # ========= 达到完成数阈值则提前结束本档位 =========
-            done_count += 1
-            if done_count >= concurrency:
-                print(f"✅ Reached done_count={concurrency}, stop current step")
-                should_stop = True
+        elif tag == "RUN_DONE":
+            if len(parts) >= 3:
+                done_count += 1
+                if done_count >= concurrency:
+                    print(f"✅ Reached done_count={concurrency}, stop current step")
+                    should_stop = True
 
         elif tag.endswith("_TIMEOUT"):
             _, task_id = line.split(maxsplit=1)
             tm.on_finish(task_id, time.time(), success=False)
+        elif tag == "RUN_TIMEOUT":
             done_count += 1
             if done_count >= concurrency:
                 print(f"✅ Reached done_count={concurrency}, stop current step")
