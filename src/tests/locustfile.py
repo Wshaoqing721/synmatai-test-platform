@@ -77,7 +77,6 @@ class BaseAsyncTaskUser(HttpUser):
         poll_name: str,
         submit_tag: str,
         auto_quit: bool = True,
-        auto_quit: bool = True,
     ):
         trace_id = str(uuid.uuid4())
         submit_ts = time.time()
