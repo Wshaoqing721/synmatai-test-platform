@@ -46,7 +46,7 @@ def _resolve_report_path(report_path: str | Path) -> Path:
 # =========================
 # 并发爬坡配置
 # =========================
-CONCURRENCY_STEPS = [1,2]
+CONCURRENCY_STEPS = [1,2,4,8,16,24]
 FAILURE_RATE_THRESHOLD = 0.01
 
 
@@ -149,11 +149,11 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
                 tm.on_start(task_id, float(ts))
 
         elif tag == "RUN_DONE":
-            if len(parts) >= 3:
-                done_count += 1
-                if done_count >= concurrency:
-                    print(f"✅ Reached done_count={concurrency}, stop current step")
-                    should_stop = True
+            done_count += 1
+            print(f"⏳ RUN_DONE detected: done_count={done_count}/{concurrency}")
+            if done_count >= concurrency:
+                print(f"✅ Reached done_count={concurrency}, stop current step")
+                should_stop = True
 
         elif tag.endswith("_DONE"):
             if len(parts) >= 4:
@@ -164,6 +164,7 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
 
         elif tag == "RUN_TIMEOUT":
             done_count += 1
+            print(f"⏱️ RUN_TIMEOUT detected: done_count={done_count}/{concurrency}")
             if done_count >= concurrency:
                 print(f"✅ Reached done_count={concurrency}, stop current step")
                 should_stop = True
