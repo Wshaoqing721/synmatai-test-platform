@@ -230,7 +230,6 @@ class BaseAsyncTaskUser(HttpUser):
                     err_msg = f"create task failed: {resp.status_code} - {resp.text}"
                     print(f"[TASK_ERROR] {trace_id} {err_msg}", flush=True)
                     resp.failure(err_msg)
-                    self._mark_finished_and_maybe_quit()
                     return
 
                 submit_resp = resp.json()
@@ -317,7 +316,9 @@ class BaseAsyncTaskUser(HttpUser):
         return None
 
     def _mark_finished_and_maybe_quit(self):
-        expected = self._expected_users() or 1
+        expected = self._expected_users()
+        if not expected:
+            return
         with self._finished_lock:
             type(self)._finished_users += 1
             done = type(self)._finished_users
