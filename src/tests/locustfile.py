@@ -221,6 +221,12 @@ class BaseAsyncTaskUser(HttpUser):
                 name=submit_name,
             ) as resp:
                 if resp.status_code != 200:
+                    self._emit_json("TASK_PAYLOAD", trace_id, submit_payload)
+                    self._emit_json(
+                        "TASK_SUBMIT_RESP",
+                        trace_id,
+                        {"status_code": resp.status_code, "text": resp.text},
+                    )
                     err_msg = f"create task failed: {resp.status_code} - {resp.text}"
                     print(f"[TASK_ERROR] {trace_id} {err_msg}", flush=True)
                     resp.failure(err_msg)
@@ -331,14 +337,22 @@ class BaseAsyncTaskUser(HttpUser):
 
     def _terminate_task(self, task_id: str):
         try:
-            self.client.post(
+            print(f"🛑 [TASK_TERMINATE] {task_id}", flush=True)
+            resp = self.client.post(
                 "/v1/task/terminate",
                 json={"task_id": task_id},
                 name="terminate_task",
             )
+            
+            self._emit_json(
+                "TASK_TERMINATE_RESP",
+                task_id,
+                {"status_code": resp.status_code, "text": resp.text},
+            )
+
         except Exception:
             # 回收接口失败不应影响 locust 退出
-            pass
+            print(f"⚠️ [TASK_TERMINATE_ERROR] {task_id}", flush=True)
 
 class PipelineUser(BaseAsyncTaskUser):
     @task

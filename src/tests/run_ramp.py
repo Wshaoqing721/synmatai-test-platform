@@ -179,10 +179,7 @@ async def run_locust_and_collect(concurrency: int, tm: TaskManager, sys_mon: Sys
             trace_id = parts[1] if len(parts) > 1 else f"error_{done_count}"
             tm.on_submit(trace_id, time.time())
             tm.on_finish(trace_id, time.time(), success=False)
-            done_count += 1
-            if done_count >= concurrency:
-                print(f"✅ Reached done_count={concurrency}, stop current step")
-                should_stop = True
+            # 不在这里计入 done_count，避免与 [RUN_DONE] 重复计数
 
         # ========= 内存保护检查（使用 available） =========
         mem_stop, mem_reason = _should_stop_for_memory(sys_mon)
